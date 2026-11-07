@@ -31,6 +31,11 @@
 | S-13 | Reconciliación periódica del contador de ocupación | 2 |
 | S-14 | Verificación obligatoria de RLS tras aplicar migraciones a mano | 2 · 6 |
 | S-15 | Todo input validado y acotado con zod en el borde | 4 |
+| S-16 | Verificación HMAC del token dentro de Postgres y secreto en `app_secrets` | 2 |
+| S-17 | Límite de intentos inválidos por usuario (10/min) dentro de la RPC | 2 |
+| S-18 | k-anonimato en estadísticas públicas (`NULL` si menos de 5 sesiones) | 2 · 5 |
+| S-19 | `profiles.rol` blindado: sin escritura + trigger `proteger_rol` | 2 |
+| S-20 | Privilegios EXECUTE mínimos por función | 2 |
 
 ---
 
@@ -367,11 +372,144 @@ resuelve con un mapeo centralizado de resultados.
 
 ---
 
+## Etapa 2 — Esquema SQL, RLS y RPC
+
+Esta etapa materializa en PostgreSQL lo diseñado en la Etapa 1 (8 tablas). Se agregan cinco
+decisiones nuevas y la matriz de políticas RLS por tabla/rol.
+
+### Matriz de políticas RLS (por tabla)
+
+| Tabla | `anon` | `authenticated` | `admin` (rol) | `service_role` |
+|-------|--------|-----------------|---------------|----------------|
+| `profiles` | — | SELECT fila propia | SELECT todas | todo (bypass) |
+| `zonas` | SELECT | SELECT | SELECT + INSERT/UPDATE/DELETE | todo |
+| `sesiones` | — | SELECT propias (`user_id = auth.uid()`) | SELECT todas | todo |
+| `eventos_scan` | — | — | SELECT | todo |
+| `ocupacion_actual` | SELECT | SELECT | SELECT | todo |
+| `snapshots_ocupacion` | SELECT | SELECT | SELECT | todo |
+| `resumen_diario` | SELECT | SELECT | SELECT | todo |
+| `app_secrets` | — | — | — | — (solo funciones DEFINER) |
+
+Regla: **ninguna** tabla de negocio expone `INSERT/UPDATE/DELETE` a la API. La única escritura de
+configuración permitida desde el cliente autenticado es `zonas`, y solo si `es_admin()`.
+
+### S-16 · Verificación HMAC del token dentro de Postgres y secreto fuera del alcance del cliente
+
+**Decisión.** El token QR `v1.<zona>.<modo>.<ventana>.<hmac>` se verifica con
+`extensions.hmac(payload, secreto, 'sha256')` **dentro de** `registrar_scan()`. El secreto vive en
+`app_secrets` (RLS activa, sin políticas, `SELECT` revocado a `anon`/`authenticated`) y solo se lee
+mediante la función `SECURITY DEFINER` `obtener_secreto_qr()`. Si el secreto falta, la RPC falla
+**cerrado** (`token_invalido`).
+
+**Amenaza.** Escanear desde casa con una foto del QR (token de larga vida), o que la `anon key`
+pública sirva para leer el secreto y falsificar tokens.
+
+**Por qué esta solución.** La firma en la base garantiza que la validación no dependa de que el borde
+tenga el secreto en memoria; aunque un atacante llame la RPC directamente, no puede forjar un token
+válido ni leer el secreto. La ventana corta más la aceptación de la ventana actual y la anterior
+(~90 s) limita la reutilización sin romper la experiencia.
+
+**Dónde se implementa.** `..._rpc_registrar_scan.sql`, `..._enums_y_tablas.sql` (tabla `app_secrets`).
+Se usa `extensions.hmac` porque pgcrypto vive en el esquema `extensions`.
+
+**Tradeoff.** El secreto debe sincronizarse entre `app_secrets` y `QR_TOKEN_SECRET` del servidor; es
+un paso manual documentado en `docs/modelo-datos.md`.
+
+### S-17 · Límite de intentos inválidos por usuario (10/min) dentro de la RPC
+
+**Decisión.** Antes de procesar el token, `registrar_scan()` cuenta los eventos **no exitosos** del
+usuario en el último minuto; si son ≥ 10 devuelve `demasiados_intentos` **sin insertar** una fila
+nueva. Además se serializa por usuario con `pg_advisory_xact_lock` para que el conteo y el cooldown
+no tengan carreras.
+
+**Amenaza.** Fuerza bruta del token (probar firmas), spam de intentos para inflar `eventos_scan` o
+rasgar la base a bajo costo.
+
+**Por qué esta solución.** El límite se aplica dentro de la misma transacción que la escritura, así
+que no depende de un almacén externo ni se puede saltar con llamadas concurrentes. Al no insertar
+filas cuando ya está bloqueado, el propio límite no se autoalimenta.
+
+**Dónde se implementa.** `..._rpc_registrar_scan.sql`.
+
+**Tradeoff.** Un usuario legítimo que acumule 10 fallos en un minuto espera hasta un minuto; es
+aceptable porque el flujo normal es 1–2 escaneos. La capa de borde (Etapa 4, Upstash) agrega un
+segundo límite por IP.
+
+### S-18 · k-anonimato en estadísticas públicas
+
+**Decisión.** `permanencia_promedio()` y `personas_distintas()` devuelven `NULL` si el rango tiene
+menos de 5 sesiones, y rechazan rangos fuera de 1..93 días. Ambas son `SECURITY DEFINER` y solo
+exponen agregados (nunca `user_id`).
+
+**Amenaza.** Re-identificación con muestras pequeñas (p. ej. «en esta franja hubo 1 persona»), y
+escaneos costosos sobre el histórico con rangos arbitrariamente grandes.
+
+**Por qué esta solución.** El umbral k=5 evita publicar celdas que describan a una sola persona o a
+muy pocas; acotar el rango protege el rendimiento y reduce la superficie de consulta.
+
+**Dónde se implementa.** `..._stats.sql`.
+
+**Tradeoff.** Zonas nuevas o franjas poco concurridas muestran «sin datos»; se prioriza privacidad.
+
+### S-19 · `profiles.rol` blindado contra autopromoción
+
+**Decisión.** `profiles` no tiene políticas de escritura y `rol` no es actualizable por
+`authenticated`/`anon`. Un trigger `proteger_rol` bloquea el cambio de `rol` cuando el JWT es
+`authenticated`/`anon`; el SQL Editor (sin JWT) y `service_role` sí pueden. El alta de admin es un
+comando manual documentado.
+
+**Amenaza.** Un usuario que edita su propio perfil podría autoasignarse `admin` y acceder a
+`eventos_scan`, al historial y a `/admin`.
+
+**Por qué esta solución.** Doble barrera (sin `UPDATE` + trigger) tolera que en el futuro se agregue
+una política de `UPDATE` a `profiles` sin reabrir la escalada. Bloquear por rol del JWT (no por rol
+de base) permite la operación legítima desde el panel SQL sin abrir la puerta a la app.
+
+**Dónde se implementa.** `..._triggers_perfil.sql`, `..._rls_policies.sql`.
+
+**Tradeoff.** Promover un admin exige un paso manual; es infrecuente y queda documentado.
+
+### S-20 · Privilegios EXECUTE mínimos por función
+
+**Decisión.** Tras crear cada función se ejecuta `revoke execute ... from public, anon,
+authenticated`; luego se concede solo lo necesario: `registrar_scan` y `es_admin` a `authenticated`;
+las dos funciones de estadísticas a `anon` y `authenticated`; **ninguna** función interna (triggers,
+cron, `refrescar_ocupacion`, `obtener_secreto_qr`, `zona_abierta`) es invocable por la API.
+
+**Amenaza.** Invocar por RPC funciones internas (`cron_*`, `refrescar_ocupacion`,
+`obtener_secreto_qr`) que no validan identidad y podrían alterar el estado o filtrar el secreto.
+
+**Por qué esta solución.** En Postgres, `EXECUTE` se concede a `PUBLIC` por defecto y Supabase además
+lo concede a `anon`/`authenticated`; sin revocarlo explícitamente, todas las funciones quedarían
+expuestas en `/rest/v1/rpc`. Revocar de `public, anon, authenticated` y conceder caso a caso deja el
+mínimo necesario. `verificacion.sql` comprueba la matriz completa.
+
+**Dónde se implementa.** Todas las migraciones (cada `create function`) y `supabase/verificacion.sql`.
+
+**Tradeoff.** Más líneas de `revoke`/`grant`; se automatiza la verificación para no depender de la
+memoria.
+
+### Limitación conocida: el token es reutilizable dentro de su ventana (~90 s)
+
+**Qué queda abierto.** Un token válido puede usarse más de una vez mientras esté dentro de la
+ventana aceptada (actual + anterior, hasta ~90 s). No hay nonce de un solo uso por token.
+
+**Por qué se aceptó.** Un nonce por token exigiría almacenar los tokens emitidos y limpiarlos, y
+complica el QR rotativo; el costo/beneficio para un proyecto universitario no lo justifica. El daño
+está acotado por otras capas: cooldown de 30 s por usuario, límite de 10 intentos inválidos/min,
+regla de una sola sesión abierta por usuario y cierre automático.
+
+**Mitigación opcional.** Validación de **geolocalización** (con consentimiento) como fallback: aunque
+el token esté vigente, un escaneo fuera del radio del Hub se rechaza. Está prevista como opcional en
+`docs/arquitectura.md` (fallback de QR estático + geolocalización).
+
+---
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
 | --- | --- |
-| Políticas RLS concretas por tabla y rol, con su test | 2 · 6 |
+| Tests automáticos de RLS (comportamiento con usuarios reales) | 6 |
 | Autorización de `/qr` y `/admin` (guard de rol, respuesta 403 sin filtrar datos) | 3 · 6 |
 | Gestión del consentimiento y su versión (Ley 21.719) | 3 |
 | Rotación de `QR_TOKEN_SECRET` y su efecto en QR activos | 3 |
@@ -384,3 +522,4 @@ resuelve con un mapeo centralizado de resultados.
 | Fecha | Cambio |
 | --- | --- |
 | 2026-11-06 | Creación del documento con las decisiones de la Etapa 1 (S-01 a S-15) |
+| 2026-11-06 | Etapa 2: esquema SQL, políticas RLS, RPC y docs (S-16 a S-20 + matriz RLS) |
