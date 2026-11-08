@@ -17,6 +17,17 @@ declare
   v_proconfig text[];
   v_anon     boolean;
   v_auth     boolean;
+  v_rel      record;
+  v_priv     text;
+  v_proc     record;
+  -- Lista blanca de funciones que pueden tener EXECUTE para anon y/o authenticated.
+  -- Quién exactamente (solo authenticated vs anon+authenticated) lo valida el bloque 10).
+  v_permitidas oid[] := array[
+    to_regprocedure('public.registrar_scan(text)'),
+    to_regprocedure('public.es_admin()'),
+    to_regprocedure('public.permanencia_promedio(uuid,timestamptz,timestamptz)'),
+    to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)')
+  ];
 begin
   -- 1) RLS activa en las 8 tablas
   foreach v_tabla in array array[
@@ -57,16 +68,43 @@ begin
   -- 4) zonas sí debe tener política de escritura (admin)
   if not exists (select 1 from pg_policies
                  where schemaname = 'public' and tablename = 'zonas' and cmd = 'INSERT') then
-    v_errores := v_errores || 'Falta política INSERT (admin) en zonas';
+    v_errores := v_errores || 'Falta política INSERT (admin) en zonas'::text;
   end if;
 
   -- 5) profiles: sin privilegio UPDATE sobre "rol" para anon/authenticated
   if has_column_privilege('anon', 'public.profiles', 'rol', 'UPDATE') then
-    v_errores := v_errores || 'anon tiene UPDATE sobre profiles.rol';
+    v_errores := v_errores || 'anon tiene UPDATE sobre profiles.rol'::text;
   end if;
   if has_column_privilege('authenticated', 'public.profiles', 'rol', 'UPDATE') then
-    v_errores := v_errores || 'authenticated tiene UPDATE sobre profiles.rol';
+    v_errores := v_errores || 'authenticated tiene UPDATE sobre profiles.rol'::text;
   end if;
+
+  -- 5b) Privilegios de escritura de tabla: anon no escribe NUNCA (ni TRUNCATE) y
+  --     authenticated solo escribe en zonas (insert/update/delete), nunca TRUNCATE.
+  --     Se recorren todas las tablas reales de public para que también cubra tablas futuras.
+  for v_rel in
+    select c.oid, c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p', 'm', 'f')
+    order by c.relname
+  loop
+    foreach v_priv in array array['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] loop
+      if has_table_privilege('anon', v_rel.oid, v_priv) then
+        v_errores := v_errores || format('anon tiene %s sobre public.%s', v_priv, v_rel.relname);
+      end if;
+      if v_priv <> 'TRUNCATE'
+         and v_rel.relname <> 'zonas'
+         and has_table_privilege('authenticated', v_rel.oid, v_priv) then
+        v_errores := v_errores || format('authenticated tiene %s sobre public.%s (solo zonas admite escritura)', v_priv, v_rel.relname);
+      end if;
+    end loop;
+
+    if has_table_privilege('authenticated', v_rel.oid, 'TRUNCATE') then
+      v_errores := v_errores || format('authenticated tiene TRUNCATE sobre public.%s', v_rel.relname);
+    end if;
+  end loop;
 
   -- 6) Triggers clave presentes
   if not exists (
@@ -76,7 +114,7 @@ begin
     where n.nspname = 'public' and c.relname = 'profiles'
       and t.tgname = 'trg_proteger_rol' and not t.tgisinternal
   ) then
-    v_errores := v_errores || 'Falta el trigger trg_proteger_rol en profiles';
+    v_errores := v_errores || 'Falta el trigger trg_proteger_rol en profiles'::text;
   end if;
   if not exists (
     select 1 from pg_trigger t
@@ -85,7 +123,40 @@ begin
     where n.nspname = 'public' and c.relname = 'zonas'
       and t.tgname = 'trg_validar_timezone_zona' and not t.tgisinternal
   ) then
-    v_errores := v_errores || 'Falta el trigger trg_validar_timezone_zona en zonas';
+    v_errores := v_errores || 'Falta el trigger trg_validar_timezone_zona en zonas'::text;
+  end if;
+
+  -- Alta de perfil al registrarse: sin este trigger nadie tendría fila en profiles.
+  if not exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'auth' and c.relname = 'users'
+      and t.tgname = 'on_auth_user_created' and not t.tgisinternal
+  ) then
+    v_errores := v_errores || 'Falta el trigger on_auth_user_created en auth.users'::text;
+  end if;
+
+  -- Contador de ocupación: se mantiene en la misma transacción que cada check-in/check-out.
+  if not exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'sesiones'
+      and t.tgname = 'trg_sesiones_actualizar_ocupacion' and not t.tgisinternal
+  ) then
+    v_errores := v_errores || 'Falta el trigger trg_sesiones_actualizar_ocupacion en sesiones'::text;
+  end if;
+
+  -- Toda zona nueva debe nacer con su fila en ocupacion_actual.
+  if not exists (
+    select 1 from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'zonas'
+      and t.tgname = 'trg_zonas_crear_ocupacion' and not t.tgisinternal
+  ) then
+    v_errores := v_errores || 'Falta el trigger trg_zonas_crear_ocupacion en zonas'::text;
   end if;
 
   -- 7) pgcrypto en el esquema extensions
@@ -93,23 +164,23 @@ begin
     select 1 from pg_extension e join pg_namespace n on n.oid = e.extnamespace
     where e.extname = 'pgcrypto' and n.nspname = 'extensions'
   ) then
-    v_errores := v_errores || 'pgcrypto no está instalado en el esquema extensions';
+    v_errores := v_errores || 'pgcrypto no está instalado en el esquema extensions'::text;
   end if;
 
   -- 8) app_secrets inaccesible para anon/authenticated
   if has_table_privilege('anon', 'public.app_secrets', 'SELECT') then
-    v_errores := v_errores || 'anon puede leer app_secrets';
+    v_errores := v_errores || 'anon puede leer app_secrets'::text;
   end if;
   if has_table_privilege('authenticated', 'public.app_secrets', 'SELECT') then
-    v_errores := v_errores || 'authenticated puede leer app_secrets';
+    v_errores := v_errores || 'authenticated puede leer app_secrets'::text;
   end if;
 
-  -- 9) Secreto qr_token_secret >= 32 bytes (si falta, es solo un aviso)
+  -- 9) Secreto qr_token_secret >= 64 caracteres (openssl rand -hex 32 = 32 bytes)
   select length(valor) into v_total from public.app_secrets where clave = 'qr_token_secret';
   if v_total is null then
     raise notice 'AVISO: falta insertar qr_token_secret en app_secrets (ver docs/modelo-datos.md).';
-  elsif v_total < 32 then
-    v_errores := v_errores || format('qr_token_secret tiene %s bytes; usa al menos 32', v_total);
+  elsif v_total < 64 then
+    v_errores := v_errores || format('qr_token_secret tiene %s caracteres; usa al menos 64 (openssl rand -hex 32)', v_total);
   end if;
 
   -- 10) Funciones: SECURITY DEFINER, search_path fijo y grants correctos
@@ -170,6 +241,23 @@ begin
     end if;
   end loop;
 
+  -- 10b) Barrido de pg_proc: ninguna OTRA función de public debe tener EXECUTE para
+  --      anon o authenticated (incluye grants por PUBLIC y funciones creadas a futuro).
+  for v_proc in
+    select p.oid, p.oid::regprocedure::text as firma
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prokind = 'f'
+    order by 2
+  loop
+    if (has_function_privilege('anon', v_proc.oid, 'EXECUTE')
+        or has_function_privilege('authenticated', v_proc.oid, 'EXECUTE'))
+       and not (v_proc.oid = any (v_permitidas)) then
+      v_errores := v_errores || format('%s no está en la lista permitida y es invocable vía API', v_proc.firma);
+    end if;
+  end loop;
+
   -- 11) Realtime publica SOLO ocupacion_actual
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     select count(*) into v_total
@@ -178,12 +266,12 @@ begin
       and schemaname = 'public'
       and tablename <> 'ocupacion_actual';
     if v_total > 0 then
-      v_errores := v_errores || 'La publicación supabase_realtime incluye tablas públicas distintas de ocupacion_actual';
+      v_errores := v_errores || 'La publicación supabase_realtime incluye tablas públicas distintas de ocupacion_actual'::text;
     end if;
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime'
                      and schemaname = 'public' and tablename = 'ocupacion_actual') then
-      v_errores := v_errores || 'ocupacion_actual no está en la publicación supabase_realtime';
+      v_errores := v_errores || 'ocupacion_actual no está en la publicación supabase_realtime'::text;
     end if;
   else
     raise notice 'AVISO: no existe la publicación supabase_realtime (se omite el chequeo de Realtime).';

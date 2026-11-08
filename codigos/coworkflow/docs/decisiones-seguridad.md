@@ -33,11 +33,13 @@
 | S-15 | Todo input validado y acotado con zod en el borde | 4 |
 | S-16 | Verificación HMAC del token dentro de Postgres y secreto en `app_secrets` | 2 |
 | S-17 | Límite de intentos inválidos por usuario (10/min) dentro de la RPC | 2 |
-| S-18 | k-anonimato en estadísticas públicas (`NULL` si menos de 5 sesiones) | 2 · 5 |
+| S-18 | k-anonimato en estadísticas públicas (`NULL` si no se alcanza `k = 5`) | 2 · 5 |
 | S-19 | `profiles.rol` blindado: sin escritura + trigger `proteger_rol` | 2 |
 | S-20 | Privilegios EXECUTE mínimos por función | 2 |
-| S-21 | k=5 también en `resumen_diario`: `permanencia_prom_seg` `NULL` con < 5 sesiones | 2 · 5 |
+| S-21 | k=5 también en `resumen_diario`: `permanencia_prom_seg` `NULL` con < 5 | 2 · 5 |
 | S-22 | Comparación de firmas HMAC por `digest` (bytea de 32 bytes) | 2 |
+| S-23 | k-anonimato por **personas distintas**, rango de 1..90 días alineado a medianoche de la zona | 2 · 5 |
+| S-24 | Permanencia solo con `cierre = 'usuario'`; `salida_at` del cierre auto acotada a 8 h | 2 · 5 |
 
 ---
 
@@ -458,6 +460,10 @@ muy pocas; acotar el rango protege el rendimiento y reduce la superficie de cons
 
 > **Ampliación (S-21).** El mismo umbral k=5 se aplica al agregado `resumen_diario.permanencia_prom_seg`.
 > Ver S-21.
+>
+> **Actualización (S-23).** El umbral ya no se cuenta sobre sesiones sino sobre **personas
+> distintas** (`count(distinct user_id)`) del mismo conjunto que se agrega, el rango permitido pasa
+> de 1..93 a **1..90 días** y `p_desde`/`p_hasta` se alinean a medianoche de la zona. Ver S-23.
 
 ### S-19 · `profiles.rol` blindado contra autopromoción
 
@@ -521,7 +527,10 @@ modo que el frontend tiene una sola regla: `NULL` = «sin datos». Además `NULL
 
 **Tradeoff.** Días con poco movimiento muestran «sin datos» en vez de un promedio, y el dashboard
 tiene que tratar `NULL` explícitamente (sin `coalesce(..., 0)`). Se acepta porque un promedio
-sobre <5 sesiones no es estadísticamente útil y sí es re-identificable.
+sobre <5 personas distintas no es estadísticamente útil y sí es re-identificable.
+
+> **Actualización (S-23/S-24).** El umbral se cuenta sobre personas distintas del conjunto promediado
+> y el promedio usa solo sesiones con `cierre = 'usuario'`. Ver S-23 y S-24.
 
 ### S-22 · Comparación de firmas por `digest` en `registrar_scan`
 
@@ -550,6 +559,100 @@ trabajo. Se acepta como defensa en profundidad porque el riesgo real ya está ac
 sesión autenticada, el cooldown de 30 s y el límite de 10 intentos inválidos/min). Si en el futuro
 la verificación se mueve al borde (Route Handler), conviene `crypto.timingSafeEqual` de Node, que
 sí es de tiempo constante.
+
+### S-23 · k-anonimato por personas distintas, día calendario de la zona y rango de 1..90 días
+
+**Decisión.** Tres ajustes sobre S-18/S-21:
+
+1. **La unidad del umbral es la persona, no la sesión.** `permanencia_promedio()`,
+   `personas_distintas()` y `cron_resumen_diario()` exigen `count(distinct user_id) >= 5` sobre
+   **el mismo conjunto** que usan para calcular (no `count(*)` de sesiones).
+2. **Día calendario de la zona.** `p_desde` y `p_hasta` se alinean a medianoche local:
+   `date_trunc('day', x at time zone z.timezone) at time zone z.timezone`, y la zona se lee de
+   `zonas.timezone`. El rango es **semiabierto** `[día(p_desde), día(p_hasta))` y se acota a
+   **1..90 días** completos (la retención de datos crudos); si los dos extremos caen el mismo día
+   calendario el rango queda vacío y se devuelve `NULL`, no una celda de minutos.
+3. **Límite declarado.** El k-anonimato **no** elimina los ataques por diferencia entre rangos
+   (ver más abajo).
+
+**Amenaza.**
+
+- *Re-identificación por conteo de sesiones:* una sola persona que visita el cowork todos los días
+  generaba 20–30 sesiones al mes y por sí sola alcanzaba `k = 5`, de modo que el «promedio» publicado
+  era esencialmente su permanencia. El umbral estaba midiendo registros, no personas.
+- *Celdas no alineadas:* con extremos libres (por ejemplo `12:00–12:15`) el público podía interrogar
+  el sistema con granularidad de minutos y reconstruir horarios de entrada/salida sin salir del rango
+  permitido; además el mismo día calendario daba resultados distintos según la hora de la consulta y
+  la zona horaria del servidor (UTC).
+- *Rangos mayores que la retención:* pedir 93 días ya devolvía datos parciales (los crudos se purgan a
+  los 90) sin decirlo, y consultas muy grandes son trabajo gratis para el servidor.
+
+**Por qué esta solución.** La unidad de riesgo es la persona: `count(distinct user_id)` mide
+exactamente cuántos individuos distintos hay detrás de una celda, así que 30 sesiones de una persona
+siguen siendo `k = 1` y no se publican. Alinear a medianoche local elimina el borde arbitrario (no se
+puede «pedir» una franja de 15 minutos) y hace que el rango sea interpretable como días de la zona. El
+tope de 90 días coincide con lo que realmente existe en la tabla, de modo que el resultado no depende
+de cuándo se purgó, y acota el costo de la consulta.
+
+**Dónde se implementa.** `..._stats.sql` (`permanencia_promedio`, `personas_distintas`),
+`..._pg_cron_jobs.sql` (`cron_resumen_diario`).
+
+**Tradeoff.** Un rango que no empieza ni termina a medianoche se redondea hacia abajo (el usuario
+recibe algo distinto de lo que pidió, pero determinista); en particular, un rango intra-día devuelve
+`NULL`, así que el dashboard debe enviar límites de día (de la zona, no de UTC) y no «últimas 24 h»
+desde la hora actual. Zonas con pocas personas muestran «sin datos» durante más tiempo que antes.
+
+#### Límite: el k-anonimato no elimina los ataques por diferencia entre rangos
+
+**Qué queda abierto.** El umbral protege *cada celda publicada*, no la *diferencia entre dos celdas*.
+Como `personas_distintas()` y `permanencia_promedio()` aceptan rangos arbitrarios de 1..90 días, se
+puede restar: `f(1–8 nov) − f(1–7 nov)` aislando el valor del 8 de noviembre aunque ese día, solo, no
+alcance `k = 5`. Con dos o tres consultas solapadas se puede despejar el conteo o la permanencia de un
+día concreto, y la alineación a medianoche no lo impide (solo impide granularidad sub-diaria).
+
+**Por qué se acepta.** Las mitigaciones reales —ruido diferencial calibrado, exigir `k` sobre cada
+celda derivada (lo que prohíbe todo rango que contenga una celda pequeña), o un presupuesto de
+consultas por usuario— agregan complejidad y coste desproporcionados para un proyecto universitario, y
+el dato protegido es la ocupación de un espacio físico, no información sensible por categoría especial
+(no hay datos de salud, biometría ni geolocalización). Se documenta porque el informe debe declararlo:
+k-anonimato ≠ privacidad diferencial.
+
+**Mitigación parcial prevista (Etapa 5).** Limitar en el dashboard las consultas a un conjunto cerrado
+de rangos (día, semana, mes alineados) en lugar de aceptar `p_desde`/`p_hasta` libres desde el cliente,
+y aplicar rate limit por IP en la ruta que las consume. Con eso el atacante tendría que llamar la RPC
+directamente y quedaría sujeto al mismo límite.
+
+
+### S-24 · Permanencia solo con `cierre = 'usuario'` y salida del cierre automático acotada a 8 h
+
+**Decisión.** `cron_cierre_auto()` escribe
+`salida_at = least(now(), s.entrada_at + interval '8 hours')` y `permanencia_promedio()` /
+`resumen_diario.permanencia_prom_seg` promedian **solo** sesiones con `cierre = 'usuario'`.
+
+**Amenaza.** Sesión olvidada: sin tope, el cierre automático grababa `salida_at = now()`, es decir, la
+hora en que corrió el job (hasta 15 min después, o a la mañana siguiente si el job falló). Eso
+registraba permanencias de 12–15 h que nunca ocurrieron, inflaba el promedio y escondía la rotación
+real del espacio. Mezclar esos cierres «administrativos» con cierres reales contamina cualquier
+métrica de permanencia y, además, hacía el dato no reproducible (dependía de cuándo corrió el cron).
+
+**Por qué esta solución.** `least(now(), entrada_at + 8 h)` conserva el mejor dato disponible en cada
+caso: si el cierre es por **fin de horario** y la sesión lleva menos de 8 h, gana `now()` (la hora real
+del cierre); si la sesión **superó el tope**, gana `entrada_at + 8 h`, que es determinista y no depende
+del retraso del job. El `check` de coherencia (`salida_at` y `cierre` nulos o ambos no nulos) se sigue
+cumpliendo y `least()` nunca produce una salida anterior a la entrada. Filtrar por
+`cierre = 'usuario'` en las estadísticas es la otra mitad: un cierre automático es una decisión del
+sistema, no una medición, así que no debe entrar en un promedio que se presenta como «permanencia
+real». `resumen_diario` sigue contando **todos** los cierres en `sesiones_cerradas` (columna de
+volumen), pero el promedio usa solo las sesiones cerradas por la persona.
+
+**Dónde se implementa.** `..._pg_cron_jobs.sql` (`cron_cierre_auto`, `cron_resumen_diario`),
+`..._stats.sql` (`permanencia_promedio`).
+
+**Tradeoff.** Quien se queda 10 h aparece con 8 h: el sistema mide ocupación, no asistencia, y no hay
+forma de distinguir «se olvidó el check-out» de «se quedó 10 h». Los días en que casi todos los cierres
+son automáticos pueden quedar sin permanencia publicable (efecto combinado con S-23: menos personas
+distintas con `cierre = 'usuario'`).
+
 
 ### Limitación conocida: el token es reutilizable dentro de su ventana (~90 s)
 
@@ -586,3 +689,4 @@ el token esté vigente, un escaneo fuera del radio del Hub se rechaza. Está pre
 | 2026-11-06 | Creación del documento con las decisiones de la Etapa 1 (S-01 a S-15) |
 | 2026-11-06 | Etapa 2: esquema SQL, políticas RLS, RPC y docs (S-16 a S-20 + matriz RLS) |
 | 2026-11-08 | Revisión de las migraciones antes de aplicarlas: k=5 también en `resumen_diario` (S-21), comparación de firmas por `digest` (S-22), cierre de sesión filtrado por zona y alineación de `qr_window_seconds` con `QR_WINDOW_SECONDS` |
+| 2026-11-08 | Segunda revisión: k-anonimato por personas distintas, rango 1..90 días alineado a medianoche de la zona y límite por diferencia entre rangos (S-23); permanencia solo con `cierre = 'usuario'` y salida del cierre auto acotada a 8 h (S-24); `verificacion.sql` ampliado (privilegios de escritura de tabla, triggers y barrido de `pg_proc`) |

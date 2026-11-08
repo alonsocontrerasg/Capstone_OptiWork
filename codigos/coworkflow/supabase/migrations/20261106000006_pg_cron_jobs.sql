@@ -30,6 +30,10 @@ $$;
 revoke execute on function public.cron_snapshot() from public, anon, authenticated;
 
 -- Cada 15 min: cierra sesiones abiertas de más de 8 h o fuera del horario (cierre='auto').
+-- salida_at = least(now(), entrada_at + 8 h): el tope de 8 h es el valor que se registra cuando
+-- la sesión ya lo excedió (no la hora en que corrió el cron, que puede ser horas después), y
+-- sigue siendo now() cuando el cierre ocurre por fin de horario. Como la sesión siempre tiene
+-- más de 0 s, least() nunca produce una salida anterior a la entrada ni en el futuro.
 -- El trigger AFTER UPDATE recalcula ocupacion_actual automáticamente.
 create or replace function public.cron_cierre_auto()
 returns void
@@ -39,7 +43,8 @@ set search_path = public, pg_temp
 as $$
 begin
   update public.sesiones s
-     set salida_at = now(), cierre = 'auto'
+     set salida_at = least(now(), s.entrada_at + interval '8 hours'),
+         cierre = 'auto'
     from public.zonas z
    where s.zona_id = z.id
      and s.salida_at is null
@@ -52,8 +57,9 @@ $$;
 revoke execute on function public.cron_cierre_auto() from public, anon, authenticated;
 
 -- Diario: consolida el día anterior (hora local de cada zona) en resumen_diario.
--- permanencia_prom_seg queda en NULL si el día tuvo menos de 5 sesiones cerradas (k=5),
--- porque la tabla es legible por anon/authenticated.
+-- permanencia_prom_seg promedia SOLO sesiones con cierre='usuario' (los cierres 'auto' son
+-- topes administrativos: 8 h o fin de horario) y queda en NULL si esas sesiones provienen de
+-- menos de 5 personas distintas (k=5), porque la tabla es legible por anon/authenticated.
 create or replace function public.cron_resumen_diario()
 returns void
 language plpgsql
@@ -61,12 +67,13 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  c_k_anonimato constant integer := 5;  -- mismo umbral que stats.sql
+  c_k_anonimato constant integer := 5;  -- mismo umbral que stats.sql (personas distintas)
   z record;
   v_fecha date;
   v_entradas integer;
   v_salidas integer;
   v_cerradas integer;
+  v_perm_personas integer;
   v_perm double precision;
   v_pico integer;
 begin
@@ -84,18 +91,28 @@ begin
       and salida_at is not null
       and (salida_at at time zone z.timezone)::date = v_fecha;
 
-    select count(*)::int,
-           avg(extract(epoch from (salida_at - entrada_at)))::double precision
-      into v_cerradas, v_perm
+    -- Columna sesiones_cerradas: cuenta todos los cierres (usuario + auto).
+    select count(*)::int into v_cerradas
     from public.sesiones
     where zona_id = z.id
       and salida_at is not null
       and (entrada_at at time zone z.timezone)::date = v_fecha;
 
-    -- k-anonimato: con menos de 5 sesiones cerradas no se publica la permanencia (NULL, no 0).
+    -- Permanencia: solo cierres 'usuario' y k-anonimato por personas distintas de ese conjunto.
+    select count(distinct user_id)::int,
+           avg(extract(epoch from (salida_at - entrada_at)))::double precision
+      into v_perm_personas, v_perm
+    from public.sesiones
+    where zona_id = z.id
+      and salida_at is not null
+      and cierre = 'usuario'
+      and (entrada_at at time zone z.timezone)::date = v_fecha;
+
+    -- k-anonimato: con menos de 5 personas distintas no se publica la permanencia (NULL, no 0).
     -- resumen_diario es legible por anon/authenticated, así que un promedio sobre 1..4
-    -- sesiones podría describir la jornada de una persona concreta.
-    if v_cerradas is null or v_cerradas < c_k_anonimato then
+    -- personas podría describir la jornada de alguien concreto. Se cuenta por persona, no por
+    -- sesión: varias sesiones del mismo día son la misma persona.
+    if v_perm_personas is null or v_perm_personas < c_k_anonimato then
       v_perm := null;
     end if;
 

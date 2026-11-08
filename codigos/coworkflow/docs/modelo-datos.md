@@ -15,7 +15,7 @@ Supabase, **en orden de nombre de archivo**, y al final se ejecuta `verificacion
 | 3 | `20261106000002_triggers_ocupacion.sql` | contador `ocupacion_actual` + publicación Realtime |
 | 4 | `20261106000003_rls_policies.sql` | políticas RLS y privilegios de tabla |
 | 5 | `20261106000004_rpc_registrar_scan.sql` | RPC de check-in/check-out con HMAC |
-| 6 | `20261106000005_stats.sql` | estadísticas públicas con k-anonimato |
+| 6 | `20261106000005_stats.sql` | estadísticas públicas con k-anonimato por personas distintas |
 | 7 | `20261106000006_pg_cron_jobs.sql` | snapshots, cierre automático, resumen diario y retención |
 
 Luego, en el SQL Editor:
@@ -103,10 +103,32 @@ PK `(zona_id, ts)`; `cantidad integer` (`check >= 0`). Una fila cada 5 min por z
 PK `(zona_id, fecha)`; `entradas`, `salidas`, `sesiones_cerradas`, `pico` (`integer`) y
 `permanencia_prom_seg` (`double precision`, **nullable**). Sobrevive a la purga de 90 días.
 
-`permanencia_prom_seg` queda en `NULL` cuando `sesiones_cerradas < 5` (**k-anonimato**, mismo
-umbral `k = 5` que `stats.sql`): la tabla la puede leer `anon`, y un promedio calculado sobre
-1–4 sesiones describiría la jornada de personas concretas. Por eso no se usa `0` como valor
-por defecto: `NULL` significa «no publicable» y el dashboard debe mostrarlo como «sin datos».
+`permanencia_prom_seg` se calcula **solo** con sesiones cerradas por el usuario (`cierre = 'usuario'`):
+los cierres `auto` son topes administrativos (8 h o fin de horario) y no miden una permanencia real.
+Además queda en `NULL` cuando esas sesiones provienen de menos de 5 **personas distintas**
+(`count(distinct user_id) < 5`, **k-anonimato**, mismo umbral `k = 5` que `stats.sql`): la tabla la
+puede leer `anon`, y un promedio calculado sobre 1–4 personas describiría la jornada de alguien
+concreto. El conteo es por persona y no por sesión: varias sesiones del mismo día son la misma
+persona. Por eso no se usa `0` como valor por defecto: `NULL` significa «no publicable» y el dashboard
+debe mostrarlo como «sin datos».
+
+### Estadísticas públicas (`stats.sql`)
+
+`permanencia_promedio()` y `personas_distintas()` reciben `(zona_id, p_desde, p_hasta)` y:
+
+- alinean ambos extremos a medianoche de la zona:
+  `date_trunc('day', x at time zone z.timezone) at time zone z.timezone` (`z.timezone` se lee de
+  `zonas`; si la zona no existe, devuelven `NULL`);
+- responden **solo** a rangos de 1..90 días completos (la ventana de retención de crudos); fuera de
+  eso devuelven `NULL`. El rango es semiabierto `[día(p_desde), día(p_hasta))`: para un solo día hay
+  que pasar el límite del día siguiente, y si ambos extremos caen el mismo día calendario el rango
+  queda vacío (`NULL`, no una celda de 0 minutos);
+- exigen `count(distinct user_id) >= 5` sobre el conjunto que agregan (**personas distintas**, no
+  sesiones), y `permanencia_promedio()` promedia solo sesiones con `cierre = 'usuario'`.
+
+`NULL` significa «sin datos publicables» (nunca `0`). Límite aceptado y documentado: el k-anonimato no
+impide comparar dos rangos solapados y despejar la celda restante (ataque por diferencia); ver
+`docs/decisiones-seguridad.md` (S-23).
 
 ### `app_secrets`
 `clave` PK `text`, `valor` `text not null`, `actualizado_at`. RLS activa, **sin políticas**.
@@ -114,7 +136,7 @@ Solo se lee mediante funciones `SECURITY DEFINER`.
 
 | `clave` | `valor` | Uso |
 |---------|---------|-----|
-| `qr_token_secret` | hex de 64 caracteres (32 bytes) | clave HMAC del token QR |
+| `qr_token_secret` | hex de 64 caracteres (32 bytes) | clave HMAC del token QR (`verificacion.sql` exige ≥ 64 caracteres) |
 | `qr_window_seconds` | `45` | duración de la ventana rotativa, en segundos |
 
 `qr_window_seconds` **debe ser igual a `QR_WINDOW_SECONDS` del `.env` (45)**; ver «Formato del
@@ -141,8 +163,8 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 |---------|:------:|:---------------:|-----|
 | `registrar_scan(text)` | ✗ | ✓ | RPC de check-in/check-out |
 | `es_admin()` | ✗ | ✓ | helper RLS |
-| `permanencia_promedio(...)` | ✓ | ✓ | estadística pública |
-| `personas_distintas(...)` | ✓ | ✓ | estadística pública |
+| `permanencia_promedio(...)` | ✓ | ✓ | estadística pública (solo `cierre = 'usuario'`) |
+| `personas_distintas(...)` | ✓ | ✓ | estadística pública (`count(distinct user_id)`) |
 | `handle_new_user`, `proteger_rol`, `validar_timezone_zona`, `refrescar_ocupacion`, `crear_ocupacion_inicial`, `actualizar_ocupacion`, `obtener_secreto_qr`, `zona_abierta`, `cron_*` | ✗ | ✗ | solo trigger/cron/RPC interno |
 
 ## Jobs de pg_cron
@@ -150,7 +172,7 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 | Job | Cron (UTC) | Función | Qué hace |
 |-----|-----------|---------|----------|
 | `coworkflow_snapshot` | `*/5 * * * *` | `cron_snapshot()` | recalcula y guarda snapshot alineado a 5 min |
-| `coworkflow_cierre_auto` | `*/15 * * * *` | `cron_cierre_auto()` | cierra sesiones > 8 h o fuera de horario (`cierre='auto'`) |
+| `coworkflow_cierre_auto` | `*/15 * * * *` | `cron_cierre_auto()` | cierra sesiones > 8 h o fuera de horario (`cierre='auto'`, `salida_at = least(now(), entrada_at + 8 h)`) |
 | `coworkflow_resumen_diario` | `10 5 * * *` | `cron_resumen_diario()` | consolida el día anterior (hora local de cada zona) |
 | `coworkflow_retencion` | `0 6 * * *` | `cron_retencion()` | purga crudos > 90 días (conserva agregados) |
 
@@ -208,7 +230,8 @@ values ('qr_token_secret', 'PEGA_AQUI_EL_HEX_DE_64_CARACTERES')
 on conflict (clave) do update set valor = excluded.valor, actualizado_at = now();
 ```
 
-(`openssl rand -hex 32` produce 64 caracteres hex = 32 bytes ≥ mínimo exigido.)
+(`openssl rand -hex 32` produce 64 caracteres hex = 32 bytes: `verificacion.sql` exige **al menos 64
+caracteres**, así que un valor hex de 64 es el mínimo aceptado.)
 
 ### 2b. Fijar la ventana del QR (45 s)
 La ventana vive en dos lugares que **deben coincidir**: `qr_window_seconds` en `app_secrets`
