@@ -1,7 +1,7 @@
 -- ============================================================
 -- CoworkFlow · Etapa 2 · Migración 5/7
--- Propósito: RPC registrar_scan(p_token) con validación HMAC, ventana
---            rotativa, cooldown, límite de intentos inválidos y reglas de
+-- Propósito: RPC registrar_scan(p_token) con validación HMAC (firmas comparadas por
+--            digest), ventana rotativa, cooldown, límite de intentos inválidos y reglas de
 --            negocio. NO lanza excepciones de negocio: devuelve un enum.
 -- Requiere: pgcrypto en el esquema `extensions` (ver migración 1).
 -- ============================================================
@@ -120,8 +120,11 @@ begin
   v_firma   := lower(v_partes[5]);
 
   -- 4) Verificación HMAC-SHA256 en la base (pgcrypto vive en el esquema `extensions`).
+  --    Se comparan los DIGEST sha256 de ambas firmas (bytea de 32 bytes, longitud fija) en
+  --    lugar del texto hex: la comparación no depende de la longitud del texto recibido ni
+  --    hace corto-circuito por tamaño. `is distinct from` mantiene el fallo cerrado ante NULL.
   v_firma_esp := encode(extensions.hmac(v_payload, v_secreto, 'sha256'), 'hex');
-  if v_firma <> v_firma_esp then
+  if extensions.digest(v_firma, 'sha256') is distinct from extensions.digest(v_firma_esp, 'sha256') then
     insert into public.eventos_scan (user_id, zona_id, tipo, resultado)
     values (v_uid, null, null, 'token_invalido');
     return 'token_invalido'::public.resultado_scan;
@@ -204,9 +207,12 @@ begin
     values (v_uid, v_zona_id, v_modo, 'entrada_ok');
     return 'entrada_ok'::public.resultado_scan;
   else
+    -- Solo la sesión abierta DE ESTA zona: un QR de otra zona no puede cerrarla.
     select * into v_sesion
     from public.sesiones
-    where user_id = v_uid and salida_at is null
+    where user_id = v_uid
+      and zona_id = v_zona_id
+      and salida_at is null
     for update;
 
     if not found then

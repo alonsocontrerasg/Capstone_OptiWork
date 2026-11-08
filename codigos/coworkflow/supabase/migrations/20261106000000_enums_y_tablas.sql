@@ -24,7 +24,7 @@ begin
   end if;
 
   if v_esquema <> 'extensions' then
-    raise notice 'AVISO: pgcrypto está en el esquema "%" (no en extensions). La migración 5 llama a extensions.hmac(); reinstala pgcrypto en "extensions" o ajusta esa llamada.', v_esquema;
+    raise notice 'AVISO: pgcrypto está en el esquema "%" (no en extensions). La migración 5 llama a extensions.hmac() y extensions.digest(); reinstala pgcrypto en "extensions" o ajusta esas llamadas.', v_esquema;
   end if;
 end $$;
 
@@ -179,10 +179,14 @@ create table if not exists public.resumen_diario (
   entradas integer not null default 0,
   salidas integer not null default 0,
   sesiones_cerradas integer not null default 0,
-  permanencia_prom_seg double precision not null default 0,
+  -- k-anonimato: NULL cuando sesiones_cerradas < 5 (mismo umbral que stats.sql). La tabla la
+  -- puede leer `anon`, y un promedio sobre 1..4 sesiones describiría a personas concretas.
+  permanencia_prom_seg double precision,
   pico integer not null default 0,
   primary key (zona_id, fecha)
 );
+comment on column public.resumen_diario.permanencia_prom_seg is
+  'Permanencia promedio en segundos. NULL si sesiones_cerradas < 5 (k-anonimato, igual que stats.sql).';
 
 -- ------------------------------------------------------------
 -- RLS activada YA (deny-by-default). Las políticas llegan en la migración 4.

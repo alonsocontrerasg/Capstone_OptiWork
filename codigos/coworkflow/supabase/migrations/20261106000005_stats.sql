@@ -3,6 +3,8 @@
 -- Propósito: funciones de estadísticas públicas con k-anonimato y rango acotado.
 --   · Devuelven NULL si hay menos de 5 sesiones en el rango (privacidad).
 --   · Solo aceptan rangos de 1..93 días para evitar escaneos masivos.
+--   · El umbral k=5 es el mismo que usa cron_resumen_diario() para
+--     resumen_diario.permanencia_prom_seg (constante c_k_anonimato en ambos archivos).
 -- Requiere: rol postgres. Idempotente.
 -- ============================================================
 
@@ -19,6 +21,7 @@ set search_path = public, pg_temp
 stable
 as $$
 declare
+  c_k_anonimato constant integer := 5;  -- mismo umbral que cron_resumen_diario()
   v_sesiones integer;
   v_promedio double precision;
 begin
@@ -38,8 +41,8 @@ begin
     and entrada_at >= p_desde
     and entrada_at < p_hasta;
 
-  if v_sesiones is null or v_sesiones < 5 then
-    return null;  -- k-anonimato: menos de 5 sesiones no se publica
+  if v_sesiones is null or v_sesiones < c_k_anonimato then
+    return null;  -- k-anonimato: menos de 5 sesiones cerradas no se publica
   end if;
 
   return v_promedio;
@@ -61,6 +64,7 @@ set search_path = public, pg_temp
 stable
 as $$
 declare
+  c_k_anonimato constant integer := 5;  -- mismo umbral que cron_resumen_diario()
   v_sesiones integer;
   v_personas bigint;
 begin
@@ -79,7 +83,7 @@ begin
     and entrada_at >= p_desde
     and entrada_at < p_hasta;
 
-  if v_sesiones is null or v_sesiones < 5 then
+  if v_sesiones is null or v_sesiones < c_k_anonimato then
     return null;  -- k-anonimato: menos de 5 sesiones no se publica
   end if;
 

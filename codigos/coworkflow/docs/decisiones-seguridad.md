@@ -36,6 +36,8 @@
 | S-18 | k-anonimato en estadísticas públicas (`NULL` si menos de 5 sesiones) | 2 · 5 |
 | S-19 | `profiles.rol` blindado: sin escritura + trigger `proteger_rol` | 2 |
 | S-20 | Privilegios EXECUTE mínimos por función | 2 |
+| S-21 | k=5 también en `resumen_diario`: `permanencia_prom_seg` `NULL` con < 5 sesiones | 2 · 5 |
+| S-22 | Comparación de firmas HMAC por `digest` (bytea de 32 bytes) | 2 |
 
 ---
 
@@ -415,6 +417,9 @@ Se usa `extensions.hmac` porque pgcrypto vive en el esquema `extensions`.
 **Tradeoff.** El secreto debe sincronizarse entre `app_secrets` y `QR_TOKEN_SECRET` del servidor; es
 un paso manual documentado en `docs/modelo-datos.md`.
 
+> **Actualización (S-22).** La comparación de firmas dentro de la RPC pasó de comparar el texto
+> hex a comparar `extensions.digest(..., 'sha256')` de ambos lados. Ver S-22.
+
 ### S-17 · Límite de intentos inválidos por usuario (10/min) dentro de la RPC
 
 **Decisión.** Antes de procesar el token, `registrar_scan()` cuenta los eventos **no exitosos** del
@@ -450,6 +455,9 @@ muy pocas; acotar el rango protege el rendimiento y reduce la superficie de cons
 **Dónde se implementa.** `..._stats.sql`.
 
 **Tradeoff.** Zonas nuevas o franjas poco concurridas muestran «sin datos»; se prioriza privacidad.
+
+> **Ampliación (S-21).** El mismo umbral k=5 se aplica al agregado `resumen_diario.permanencia_prom_seg`.
+> Ver S-21.
 
 ### S-19 · `profiles.rol` blindado contra autopromoción
 
@@ -489,6 +497,60 @@ mínimo necesario. `verificacion.sql` comprueba la matriz completa.
 **Tradeoff.** Más líneas de `revoke`/`grant`; se automatiza la verificación para no depender de la
 memoria.
 
+### S-21 · El umbral k=5 también se aplica a `resumen_diario.permanencia_prom_seg`
+
+**Decisión.** `resumen_diario.permanencia_prom_seg` pasa a ser **nullable** (sin `default 0`) y
+`cron_resumen_diario()` la escribe como `NULL` cuando el día tiene `sesiones_cerradas < 5`.
+`stats.sql` mantiene el mismo umbral con una constante explícita, `c_k_anonimato = 5`, igual que
+la del job. Es la extensión de S-18 a la tabla de agregados.
+
+**Amenaza.** `resumen_diario` es legible por `anon` y `authenticated` (dashboard público). Un día
+con 1 a 4 sesiones cerradas publicaba un promedio exacto (p. ej. «7 h 20 min») que, cruzado con
+el horario conocido del Hub, permite inferir la jornada de una persona identificable. Peor aún,
+el `default 0` convertía «no hay dato suficiente» en un valor que se lee como dato real.
+
+**Por qué esta solución.** El umbral se aplica **donde se calcula el agregado**, así que no
+depende del cliente ni de la consulta: si el dato no es publicable, simplemente no se escribe.
+`NULL` es la misma convención que ya usan `permanencia_promedio()` y `personas_distintas()`, de
+modo que el frontend tiene una sola regla: `NULL` = «sin datos». Además `NULL` no participa en
+`avg()` ni en sumas, así que no contamina reportes posteriores; un `0` sí lo haría.
+
+**Dónde se implementa.** `..._enums_y_tablas.sql` (columna nullable + `comment on column`),
+`..._pg_cron_jobs.sql` (`cron_resumen_diario`, constante `c_k_anonimato`) y `..._stats.sql`
+(misma constante en las dos funciones públicas).
+
+**Tradeoff.** Días con poco movimiento muestran «sin datos» en vez de un promedio, y el dashboard
+tiene que tratar `NULL` explícitamente (sin `coalesce(..., 0)`). Se acepta porque un promedio
+sobre <5 sesiones no es estadísticamente útil y sí es re-identificable.
+
+### S-22 · Comparación de firmas por `digest` en `registrar_scan`
+
+**Decisión.** La firma recibida en el token y la firma esperada se comparan como
+`extensions.digest(<texto>, 'sha256')` (bytea de 32 bytes) con `is distinct from`, en lugar de
+comparar el texto hex con `<>`. Refina la verificación de S-16 sin cambiar el formato del token.
+
+**Amenaza.** Un canal lateral de temporización: una comparación de cadenas puede filtrar, por el
+tiempo de respuesta, cuántos caracteres iniciales del HMAC coinciden, lo que en teoría permite
+reconstruir una firma válida carácter a carácter. También los casos de borde del texto recibido:
+una firma de longitud arbitraria (o con mayúsculas o basura) que se compara contra un hex de
+64 caracteres.
+
+**Por qué esta solución.** Reducir ambos lados a SHA-256 antes de comparar hace que (a) la
+comparación opere siempre sobre **32 bytes de longitud fija**, independiente del largo del texto
+recibido, de modo que el tiempo ya no depende de cuántos caracteres coinciden al inicio, y
+(b) normalice la entrada. `is distinct from` evita que un `NULL` inesperado haga que la condición
+se evalúe como `NULL` (que en un `if` de PL/pgSQL no es «verdadero»), o sea, mantiene el
+comportamiento de **fallar cerrado**.
+
+**Dónde se implementa.** `..._rpc_registrar_scan.sql`, paso 4 de `registrar_scan()`.
+
+**Tradeoff y límite honesto.** Es una **mitigación**, no una prueba de tiempo constante:
+PostgreSQL no expone una comparación de tiempo constante en SQL y el planificador puede reordenar
+trabajo. Se acepta como defensa en profundidad porque el riesgo real ya está acotado (se necesita
+sesión autenticada, el cooldown de 30 s y el límite de 10 intentos inválidos/min). Si en el futuro
+la verificación se mueve al borde (Route Handler), conviene `crypto.timingSafeEqual` de Node, que
+sí es de tiempo constante.
+
 ### Limitación conocida: el token es reutilizable dentro de su ventana (~90 s)
 
 **Qué queda abierto.** Un token válido puede usarse más de una vez mientras esté dentro de la
@@ -523,3 +585,4 @@ el token esté vigente, un escaneo fuera del radio del Hub se rechaza. Está pre
 | --- | --- |
 | 2026-11-06 | Creación del documento con las decisiones de la Etapa 1 (S-01 a S-15) |
 | 2026-11-06 | Etapa 2: esquema SQL, políticas RLS, RPC y docs (S-16 a S-20 + matriz RLS) |
+| 2026-11-08 | Revisión de las migraciones antes de aplicarlas: k=5 también en `resumen_diario` (S-21), comparación de firmas por `digest` (S-22), cierre de sesión filtrado por zona y alineación de `qr_window_seconds` con `QR_WINDOW_SECONDS` |

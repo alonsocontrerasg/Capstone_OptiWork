@@ -101,11 +101,26 @@ PK `(zona_id, ts)`; `cantidad integer` (`check >= 0`). Una fila cada 5 min por z
 
 ### `resumen_diario`
 PK `(zona_id, fecha)`; `entradas`, `salidas`, `sesiones_cerradas`, `pico` (`integer`) y
-`permanencia_prom_seg` (`double precision`). Sobrevive a la purga de 90 días.
+`permanencia_prom_seg` (`double precision`, **nullable**). Sobrevive a la purga de 90 días.
+
+`permanencia_prom_seg` queda en `NULL` cuando `sesiones_cerradas < 5` (**k-anonimato**, mismo
+umbral `k = 5` que `stats.sql`): la tabla la puede leer `anon`, y un promedio calculado sobre
+1–4 sesiones describiría la jornada de personas concretas. Por eso no se usa `0` como valor
+por defecto: `NULL` significa «no publicable» y el dashboard debe mostrarlo como «sin datos».
 
 ### `app_secrets`
 `clave` PK `text`, `valor` `text not null`, `actualizado_at`. RLS activa, **sin políticas**.
 Solo se lee mediante funciones `SECURITY DEFINER`.
+
+| `clave` | `valor` | Uso |
+|---------|---------|-----|
+| `qr_token_secret` | hex de 64 caracteres (32 bytes) | clave HMAC del token QR |
+| `qr_window_seconds` | `45` | duración de la ventana rotativa, en segundos |
+
+`qr_window_seconds` **debe ser igual a `QR_WINDOW_SECONDS` del `.env` (45)**; ver «Formato del
+token QR». Si la fila no existe, la RPC usa `c_ventana_default = 45`
+(`..._rpc_registrar_scan.sql`), que es el valor de `.env.example`, así que por defecto ambos
+lados ya coinciden.
 
 ## Triggers
 
@@ -155,9 +170,22 @@ v1.<zona_uuid>.<entrada|salida>.<ventana>.<hmac_hex>
 - `hmac_hex` = `HMAC-SHA256(payload, secreto)` en hex minúscula (64 caracteres), donde
   `payload = "v1.<zona_uuid>.<modo>.<ventana>"`.
 
-El servidor acepta la **ventana actual y la anterior** (hasta ~90 s de margen). Si necesitas
-cambiar la duración, inserta `qr_window_seconds` en `app_secrets` **y** ajusta
-`QR_WINDOW_SECONDS` en el cliente servidor para que coincidan.
+El servidor acepta la **ventana actual y la anterior** (hasta ~90 s de margen).
+
+### Coincidencia obligatoria de la ventana: 45 s
+
+`qr_window_seconds` (`app_secrets`) y `QR_WINDOW_SECONDS` (`.env.local` / Vercel) **deben tener
+el mismo valor: `45`**. El servidor firma la ventana calculada con `QR_WINDOW_SECONDS` y la RPC
+la valida con `qr_window_seconds`; si los valores difieren, la ventana firmada nunca cae en
+«actual o anterior» y **todos** los escaneos se rechazan con `token_expirado` (falla cerrado:
+no abre un hueco de seguridad, pero rompe el check-in). Si cambias uno, cambia el otro y
+re-despliega; el QR vigente se invalida solo.
+
+| Dónde | Nombre | Valor |
+|-------|--------|-------|
+| `.env.local` / Vercel | `QR_WINDOW_SECONDS` | `45` |
+| `app_secrets` (SQL) | fila con `clave = 'qr_window_seconds'` | `45` |
+| RPC, si falta la fila | `c_ventana_default` en `..._rpc_registrar_scan.sql` | `45` |
 
 ## Pasos manuales (una sola vez)
 
@@ -181,6 +209,21 @@ on conflict (clave) do update set valor = excluded.valor, actualizado_at = now()
 ```
 
 (`openssl rand -hex 32` produce 64 caracteres hex = 32 bytes ≥ mínimo exigido.)
+
+### 2b. Fijar la ventana del QR (45 s)
+La ventana vive en dos lugares que **deben coincidir**: `qr_window_seconds` en `app_secrets`
+(validación en la RPC) y `QR_WINDOW_SECONDS` en `.env.local` / Vercel (firma en el servidor).
+Ambos van en `45`. Si la fila falta, la RPC usa `45` por defecto y coincide con `.env.example`,
+pero es mejor dejarla explícita para que se vea en la base:
+
+```sql
+insert into public.app_secrets (clave, valor)
+values ('qr_window_seconds', '45')
+on conflict (clave) do update set valor = excluded.valor, actualizado_at = now();
+```
+
+Si cambias este valor, cambia también `QR_WINDOW_SECONDS` (y al revés): con valores distintos
+la RPC rechaza todos los tokens como `token_expirado`.
 
 ### 3. Promover un administrador
 El seed **no** crea admins. Tras registrar tu usuario, ejecuta en el SQL Editor:

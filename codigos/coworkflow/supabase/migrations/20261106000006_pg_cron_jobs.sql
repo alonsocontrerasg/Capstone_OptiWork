@@ -52,6 +52,8 @@ $$;
 revoke execute on function public.cron_cierre_auto() from public, anon, authenticated;
 
 -- Diario: consolida el día anterior (hora local de cada zona) en resumen_diario.
+-- permanencia_prom_seg queda en NULL si el día tuvo menos de 5 sesiones cerradas (k=5),
+-- porque la tabla es legible por anon/authenticated.
 create or replace function public.cron_resumen_diario()
 returns void
 language plpgsql
@@ -59,6 +61,7 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  c_k_anonimato constant integer := 5;  -- mismo umbral que stats.sql
   z record;
   v_fecha date;
   v_entradas integer;
@@ -82,12 +85,19 @@ begin
       and (salida_at at time zone z.timezone)::date = v_fecha;
 
     select count(*)::int,
-           coalesce(avg(extract(epoch from (salida_at - entrada_at))), 0)::double precision
+           avg(extract(epoch from (salida_at - entrada_at)))::double precision
       into v_cerradas, v_perm
     from public.sesiones
     where zona_id = z.id
       and salida_at is not null
       and (entrada_at at time zone z.timezone)::date = v_fecha;
+
+    -- k-anonimato: con menos de 5 sesiones cerradas no se publica la permanencia (NULL, no 0).
+    -- resumen_diario es legible por anon/authenticated, así que un promedio sobre 1..4
+    -- sesiones podría describir la jornada de una persona concreta.
+    if v_cerradas is null or v_cerradas < c_k_anonimato then
+      v_perm := null;
+    end if;
 
     select coalesce(max(cantidad), 0)::int into v_pico
     from public.snapshots_ocupacion
