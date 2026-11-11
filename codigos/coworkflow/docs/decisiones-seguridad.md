@@ -786,9 +786,21 @@ usa firma simétrica); `getUser()` daría la misma garantía con una llamada de 
 Leer el rol de `profiles` en cada llamada hace que quitar permisos tenga efecto inmediato y que el
 `role` del token sea irrelevante (el token no decide nada). Para `next` se exige que empiece con `/`,
 que no sea `//` ni contenga `\` o caracteres de control, y se verifica con `new URL()` que el origen no
-cambie; cualquier intento cae al destino por defecto. Los guards se ejecutan en la página o el Route
+cambie **y que el resultado siga siendo una ruta interna** (ver hallazgo); cualquier intento cae al
+destino por defecto. Los guards se ejecutan en la página o el Route
 Handler, no en el proxy: así no hay rutas "olvidadas" fuera del matcher y no se depende de un control
 que la documentación de Next desaconseja para autorización.
+
+**Hallazgo (2026-11-10) — se validaba la entrada, no el resultado.** `normalizarDestinoInterno`
+comprobaba `//`, la barra invertida y el origen **antes** de parsear, pero el parser colapsa los
+segmentos `.` y `..`: `/..//evil.com`, `/.//evil.com` y `/a/..//evil.com` pasan los filtros de entrada,
+conservan `origin === base` y aun así normalizan a `//evil.com`. Ese valor se devolvía tal cual, y el
+navegador lo interpreta como URL protocol-relative, de modo que el «anti open-redirect» quedaba anulado
+(`router.replace("//evil.com")` saca al usuario del sitio). La corrección valida también el
+**resultado** de `new URL()`: si empieza con `//` o contiene `\`, cae a `DESTINO_POR_DEFECTO`. Los casos
+—`/..//evil.com`, `/.//evil.com`, `/a/..//evil.com`, `//evil.com`, `/\evil.com`, `https://evil.com`
+deben caer; `/qr`, `/scan?modo=entrada`, `/dashboard#x` deben pasar— quedan listados junto a la función
+para convertirlos en tests de Vitest en la Etapa 6.
 
 **Dónde se implementa.** `src/lib/auth/session.ts`, `src/lib/auth/guards.ts`,
 `src/lib/auth/redirects.ts`, `src/app/qr/page.tsx`, `src/app/api/qr/token/route.ts`,
@@ -901,3 +913,4 @@ Supabase).
 | 2026-11-10 | Etapa 3: consentimiento como precondición del scan (S-25), firma del QR solo en el servidor (S-26), guards con `getClaims()` y anti open-redirect (S-27), signout por POST y mismo origen (S-28). Revisión de S-10: se desactiva PPR (`cacheComponents`) porque el nonce es incompatible con los documentos prerenderizados |
 | 2026-11-10 | Revisión de S-09: el login se mueve al servidor para que las cookies `sb-*` sean realmente httpOnly; S-29 añadido (errores de auth genéricos, anti-enumeración y TODO de rate limit) |
 | 2026-11-10 | Endurecimiento de S-29: `try/catch` en `/auth/login` que responde `generico` y registra solo `error.name`, cliente tolerante a respuestas no JSON, y se documenta que la anti-enumeración solo es completa con «Confirm email» activado |
+| 2026-11-10 | Hallazgo en S-27: `normalizarDestinoInterno` validaba la entrada pero no el resultado de `new URL()`, así que `/..//evil.com` (y variantes con `.`/`..`) normalizaban a `//evil.com` y anulaban el anti open-redirect. Ahora se valida también el resultado |
