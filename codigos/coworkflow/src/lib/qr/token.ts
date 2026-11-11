@@ -7,7 +7,10 @@
  *
  * - `ventana` = `floor(epoch_segundos / QR_WINDOW_SECONDS)`.
  * - `hmac_hex` = HMAC-SHA256(payload, QR_TOKEN_SECRET) en hex minúscula (64 caracteres),
- *   donde `payload` es todo lo anterior (`v1.<zona>.<modo>.<ventana>`).
+ *   donde `payload` es todo lo anterior (`v1.<zona>.<modo>.<ventana>`). La clave HMAC son los
+ *   bytes UTF-8 del secreto **tal como está escrito** (los 64 caracteres hex), igual que
+ *   `extensions.hmac(data text, key text, 'sha256')`: pgcrypto codifica ambos a bytes y no
+ *   decodifica el hex. La entropía sigue siendo de 256 bits (32 bytes).
  *
  * Este módulo es PURO (no lee variables de entorno ni usa `next/*`): recibe el secreto como
  * argumento, así Vitest puede probarlo sin montar la app y el secreto no se filtra por un
@@ -82,7 +85,13 @@ export function armarPayload({ zonaId, modo, ventana }: PartesTokenQr): string {
   return `${VERSION_TOKEN_QR}.${zonaId.toLowerCase()}.${modo}.${ventana}`;
 }
 
-/** Convierte un secreto hex de 64 caracteres (32 bytes) a bytes (ArrayBuffer). */
+/**
+ * Convierte un secreto hex de 64 caracteres a su `bytea` (32 bytes).
+ *
+ * No se usa para firmar: el token QR usa el **texto** hex como clave (ver `firmarHmacHex`),
+ * porque así lo hace `extensions.hmac(text, text, 'sha256')`. Se mantiene exportada como
+ * utilidad de conversión (tests y consumidores que necesiten los bytes del secreto).
+ */
 export function hexABytes(hex: string): ArrayBuffer {
   if (!RE_SECRETO_HEX.test(hex)) {
     throw new Error(
@@ -100,14 +109,26 @@ export function bytesAHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** HMAC-SHA256 en hex minúscula usando Web Crypto (disponible en Node 18+ y en el edge). */
+/**
+ * HMAC-SHA256 en hex minúscula usando Web Crypto (disponible en Node 18+ y en el edge).
+ *
+ * La clave son los bytes UTF-8 de `secretoHex` (64 caracteres → 64 bytes), **no** el `bytea`
+ * decodificado. Es lo que hace pgcrypto con `extensions.hmac(payload, secreto, 'sha256')`
+ * cuando el secreto es `text`: Postgres codifica la cadena y no interpreta el hex. Firmar con
+ * los 32 bytes decodificados produce firmas distintas y toda verificación fallaría.
+ */
 export async function firmarHmacHex(
   payload: string,
   secretoHex: string,
 ): Promise<string> {
+  if (!RE_SECRETO_HEX.test(secretoHex)) {
+    throw new Error(
+      "El secreto HMAC debe tener exactamente 64 caracteres hexadecimales (256 bits)",
+    );
+  }
   const clave = await globalThis.crypto.subtle.importKey(
     "raw",
-    hexABytes(secretoHex),
+    new TextEncoder().encode(secretoHex),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
