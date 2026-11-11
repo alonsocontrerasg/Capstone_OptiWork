@@ -1,6 +1,6 @@
 -- ============================================================
 -- CoworkFlow · verificacion.sql — Etapa 2
--- Ejecutar en el SQL Editor DESPUÉS de aplicar las 7 migraciones y el seed.
+-- Ejecutar en el SQL Editor DESPUÉS de aplicar las 8 migraciones y el seed.
 -- Corre como postgres. Si todo está bien termina con:
 --   NOTICE: Verificación OK ...
 -- Si algo falla, lanza una excepción listando los problemas encontrados.
@@ -24,6 +24,7 @@ declare
   -- Quién exactamente (solo authenticated vs anon+authenticated) lo valida el bloque 10).
   v_permitidas oid[] := array[
     to_regprocedure('public.registrar_scan(text)'),
+    to_regprocedure('public.registrar_consentimiento(integer)'),
     to_regprocedure('public.es_admin()'),
     to_regprocedure('public.permanencia_promedio(uuid,timestamptz,timestamptz)'),
     to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)')
@@ -183,6 +184,19 @@ begin
     v_errores := v_errores || format('qr_token_secret tiene %s caracteres; usa al menos 64 (openssl rand -hex 32)', v_total);
   end if;
 
+  -- 9b) El enum resultado_scan incluye 'sin_consentimiento' (gate de la Etapa 3).
+  --     Si falta, registrar_scan() no compila o el gate no se puede devolver.
+  if not exists (
+    select 1
+    from pg_enum e
+    join pg_type t on t.oid = e.enumtypid
+    join pg_namespace n on n.oid = t.typnamespace
+    where n.nspname = 'public' and t.typname = 'resultado_scan'
+      and e.enumlabel = 'sin_consentimiento'
+  ) then
+    v_errores := v_errores || 'El enum resultado_scan no tiene el valor sin_consentimiento (falta la migración 8)'::text;
+  end if;
+
   -- 10) Funciones: SECURITY DEFINER, search_path fijo y grants correctos
   foreach v_firma in array array[
     'public.handle_new_user()',
@@ -195,6 +209,7 @@ begin
     'public.obtener_secreto_qr()',
     'public.zona_abierta(uuid)',
     'public.registrar_scan(text)',
+    'public.registrar_consentimiento(integer)',
     'public.permanencia_promedio(uuid,timestamptz,timestamptz)',
     'public.personas_distintas(uuid,timestamptz,timestamptz)',
     'public.cron_snapshot()',
@@ -227,7 +242,7 @@ begin
       if not v_anon or not v_auth then
         v_errores := v_errores || format('%s debe ser ejecutable por anon y authenticated', v_firma);
       end if;
-    elsif v_nombre in ('public.registrar_scan', 'public.es_admin') then
+    elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin') then
       if v_anon then
         v_errores := v_errores || format('%s NO debe ser ejecutable por anon', v_firma);
       end if;

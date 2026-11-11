@@ -32,7 +32,7 @@ Verificado en el `package.json` y en `node_modules` del repositorio (06-11-2026)
 
 | Componente | Versión | Notas |
 | --- | --- | --- |
-| Next.js | 16.4.5 | App Router, `cacheComponents: true`, `partialPrefetching: true` |
+| Next.js | 16.4.5 | App Router; PPR desactivado en la Etapa 3 (`cacheComponents` fuera, por la CSP con nonce — ver S-10) |
 | React | 19.3.0 | Server Components + islas cliente |
 | TypeScript | 5.x | `strict: true`, alias `@/* → ./src/*` |
 | Tailwind CSS | 4.x | vía `@tailwindcss/turbopack`, `@import "tailwindcss"` en `globals.css` |
@@ -44,9 +44,10 @@ Verificado en el `package.json` y en `node_modules` del repositorio (06-11-2026)
 | Vitest | 5.1.0 | Tests de lógica de negocio y de RLS |
 | Node / npm | v26.13.0 / 12.2.2 | Entorno local |
 
-**No se agregan dependencias en esta etapa.** Las que faltan se incorporan cuando la etapa las
-necesita y quedan justificadas ahí: `@upstash/redis` + `@upstash/ratelimit` (Etapa 4),
-`server-only` (Etapa 3).
+**Dependencias agregadas por etapa.** `server-only` se instaló en la Etapa 3 (junto con `@supabase/ssr`,
+que ya estaba) para impedir que `src/lib/env.server.ts` o `src/lib/supabase/admin.ts` terminen en el
+bundle del navegador. `@upstash/redis` + `@upstash/ratelimit` se incorporan en la Etapa 4, cuando se
+usan.
 
 ## 3. Convenciones de Next.js 16 que condicionan el diseño
 
@@ -55,12 +56,16 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
 
 1. **`middleware.ts` está deprecado** → se usa `src/proxy.ts` (export `proxy`, o `default`).
    Ahí viven el refresh de sesión de Supabase y los headers de seguridad (`S-09`, `S-10`).
-2. **`cacheComponents: true`** implica PPR por defecto: cada ruta se prerenderiza como shell
-   estático y lo dinámico se transmite. Por eso:
+2. **`cacheComponents` (PPR) está desactivado desde la Etapa 3.** Se activó en el andamiaje inicial,
+   pero el nonce de la CSP (S-10) es incompatible con documentos prerenderizados: un shell estático
+   servido desde caché llega con un nonce ya gastado y el navegador bloquea sus scripts. Por eso:
+   - No se usan `'use cache'`, `cacheLife()` ni `cacheTag()`; el build muestra todas las rutas como
+     dinámicas (`ƒ`).
    - No se usa `export const dynamic`, `export const revalidate` ni `export const runtime`.
-   - Todo lo que lee `cookies()`/DB en request-time va **dentro de `<Suspense>`** con un
-     `loading.tsx` o fallback explícito.
-   - Lo cacheable se marca con `'use cache'` + `cacheLife()` + `cacheTag()`.
+   - Todo lo que lee `cookies()`/DB en request-time puede renderizarse sin `<Suspense>`; cuando el
+     streaming mejore la experiencia (Etapa 5), se usa igual.
+   - Si en el futuro se quiere PPR, hay que cambiar la estrategia de CSP (SRI o `'unsafe-inline'`), no
+     solo volver a activar el flag.
 3. **Typed routes activas**: las páginas usan `PageProps<'/dashboard'>` / `LayoutProps<'/'>`,
    y `params` / `searchParams` son `Promise` (se hace `await`).
 4. **`GET` Route Handlers siguen el modelo de prerender** (se vuelven request-time al tocar red,
@@ -140,12 +145,15 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
      `sessionStorage`, ni en `localStorage`.
 3. El Client Component hace `POST /api/scan` con `{ t }`. El `modo` de la query string es solo
    presentación: el modo real está firmado dentro del token (`S-06`).
-4. `/api/scan`: comprueba `Origin`/`Host`, valida con zod, aplica rate limit (usuario + hash de
-   IP), verifica HMAC con comparación en tiempo constante y acepta la ventana actual y la
-   anterior.
-5. Llama `rpc('registrar_scan', { p_zona_id, p_modo })` con el JWT del usuario. La RPC, en una
-   sola transacción, valida `auth.uid()`, zona activa, horario, cooldown de 30 s y estado de la
-   sesión; escribe en `sesiones` y `eventos_scan`; el trigger recalcula `ocupacion_actual`.
+4. `/api/scan`: comprueba mismo origen, valida el body con zod (`{ t }`), aplica rate limit
+   (usuario + hash de IP) y llama `rpc('registrar_scan', { p_token })` con el JWT del usuario. La
+   ruta **no** verifica la firma ni interpreta zona/modo: solo transporta el token.
+5. La **RPC**, en una sola transacción, parsea el token, verifica el HMAC-SHA256 contra
+   `app_secrets.qr_token_secret` (comparando `digest`, `S-22`) y acepta la ventana actual y la
+   anterior; luego valida `auth.uid()`, consentimiento (`sin_consentimiento`), límite de 10 intentos
+   inválidos/min, zona activa, horario, cooldown de 30 s y estado de la sesión. Escribe en
+   `sesiones` y `eventos_scan`; el trigger recalcula `ocupacion_actual`. El servidor de Next **no**
+   conoce el secreto HMAC: firma el QR (S-26) y delega la verificación en Postgres (S-16).
 6. La respuesta se mapea a un resultado tipado y la pantalla confirma en español.
 
 | `resultado` | HTTP | Mensaje al usuario |
@@ -154,6 +162,7 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
 | `salida_ok` | 200 | «Salida registrada» |
 | `sesion_ya_abierta` | 409 | «Ya tienes una entrada activa» |
 | `sin_sesion_abierta` | 409 | «No tienes una entrada activa» |
+| `sin_consentimiento` | 403 | «Acepta el aviso de privacidad para marcar tu asistencia» |
 | `cooldown` | 429 | «Espera unos segundos antes de volver a escanear» |
 | `token_invalido` / `token_expirado` | 403 | «El código venció, escanea el QR nuevamente» |
 | `fuera_horario` | 409 | «El cowork está cerrado» |
@@ -163,15 +172,18 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
 
 ### 5.2 QR rotativo (`/qr`, solo admin)
 
-- Página protegida: el `layout` del segmento exige rol `admin`; sin sesión → `/login`, con
-  sesión pero sin rol → 403.
-- El cliente pide `GET /api/qr/token?zona=<slug>` cada ~10 s y recibe
-  `{ token, svg, expiraEnSegundos, ventana }` con `Cache-Control: no-store`.
-- El servidor firma `v1.<zona_id>.<modo>.<ventana>` con HMAC-SHA256 (Web Crypto, sin
-  dependencias nuevas) y renderiza el QR con `qrcode` en modo SVG (nítido en pantalla e
-  impresión).
-- Ventana de 45 s (`QR_WINDOW_SECONDS`) con tolerancia de una ventana anterior. La página
-  muestra cuenta regresiva y refresca sin recargar.
+- Página protegida por `requireAdmin()` (guard de la propia página, no del proxy): sin sesión →
+  `/login?next=/qr`; con sesión pero sin rol → `forbidden()` (403 en `forbidden.tsx`).
+- Muestra **dos QR a la vez** (Entrada y Salida) de la zona elegida con `?zona=<slug>`; si hay una
+  sola zona activa no aparece selector.
+- El cliente pide `GET /api/qr/token?zona=<slug>&modo=<entrada|salida>` al montar y cada vez que la
+  ventana está por vencer; recibe `{ token, svg, ventana, expiraEnSegundos, url, zona, modo }` con
+  `Cache-Control: no-store`.
+- El servidor firma `v1.<zona_id>.<modo>.<ventana>` con HMAC-SHA256 (Web Crypto, sin dependencias
+  nuevas) y renderiza el QR con `qrcode` en modo SVG (nítido en pantalla e impresión). El secreto no
+  sale del servidor y el navegador recibe el SVG ya armado.
+- Ventana de 45 s (`QR_WINDOW_SECONDS`) con tolerancia de una ventana anterior. La página muestra
+  cuenta regresiva, se renueva un segundo antes de vencer y se refresca al volver a la pestaña.
 - Fallback previsto (fuera del MVP): QR estático impreso + geolocalización opcional con
   consentimiento.
 
@@ -318,14 +330,18 @@ por git.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Pública | Cliente de navegador; su poder lo limita RLS |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Secreta, solo servidor** | Scripts locales y tareas admin; ignora RLS |
 | `NEXT_PUBLIC_SITE_URL` | Pública | Redirect del magic link y URLs impresas en los QR |
-| `QR_TOKEN_SECRET` | **Secreta, solo servidor** | Firma HMAC de los tokens de QR (≥32 bytes aleatorios) |
-| `QR_WINDOW_SECONDS` | Config | Duración de la ventana del QR (45 por defecto) |
+| `QR_TOKEN_SECRET` | **Secreta, solo servidor** | Firma HMAC de los tokens de QR: **exactamente 64 hex** (32 bytes, `openssl rand -hex 32`) y el mismo valor que `app_secrets.qr_token_secret` |
+| `QR_WINDOW_SECONDS` | Config | Duración de la ventana del QR (45 por defecto); debe coincidir con `app_secrets.qr_window_seconds` |
 | `NEXT_PUBLIC_ZONA_POR_DEFECTO` | Pública | Slug usado cuando la URL no trae `?zona=` |
-| `UPSTASH_REDIS_REST_URL` / `…_TOKEN` | **Secretas** | Rate limiting (Etapa 4); vacías en local |
+| `UPSTASH_REDIS_REST_URL` / `…_TOKEN` | **Secretas** | Rate limiting (Etapa 4); opcionales en local, **obligatorias en producción** |
 
 Reglas: ninguna variable secreta lleva prefijo `NEXT_PUBLIC_` (Next las incrusta en el bundle del
-navegador en build-time); `src/lib/env.ts` valida todas con zod al arrancar y falla ruidosamente
-si falta una clave o si `QR_TOKEN_SECRET` es demasiado corta.
+navegador en build-time); `src/lib/env.ts` valida las públicas y `src/lib/env.server.ts` las secretas
+con zod al arrancar, y falla ruidosamente si falta una clave o si `QR_TOKEN_SECRET` no tiene 64
+caracteres hex. `env.server.ts` está marcado `server-only`: un import desde un Client Component rompe
+el build en vez de filtrar la clave. La falta de Upstash se valida **al usar el rate limiter** (no al
+importar), para no exigir el servicio durante `next build`; en producción lanza y el endpoint falla
+cerrado.
 
 ## 10. Estructura de carpetas
 
@@ -347,20 +363,21 @@ OptiWork/
 ├─ src/
 │  ├─ proxy.ts                        # Etapa 3: refresh de sesión + CSP/HSTS
 │  ├─ app/
-│  │  ├─ layout.tsx  page.tsx  globals.css  error.tsx  not-found.tsx
+│  │  ├─ layout.tsx  page.tsx  globals.css  error.tsx  not-found.tsx  forbidden.tsx
 │  │  ├─ login/page.tsx               # Etapa 3
 │  │  ├─ auth/callback/route.ts       # Etapa 3: magic link → cookies
 │  │  ├─ auth/signout/route.ts        # Etapa 3
 │  │  ├─ scan/page.tsx                # Etapa 4
 │  │  ├─ dashboard/page.tsx           # Etapa 5
 │  │  ├─ dashboard/loading.tsx        # Etapa 5
-│  │  ├─ qr/page.tsx                  # Etapa 6 (admin)
+│  │  ├─ qr/page.tsx                  # Etapa 3 (admin): QR de entrada y salida
 │  │  ├─ admin/layout.tsx             # Etapa 6: guard de rol
 │  │  ├─ admin/page.tsx               # Etapa 6: configuración de zonas
 │  │  ├─ admin/historial/page.tsx     # Etapa 6
 │  │  └─ api/
 │  │     ├─ scan/route.ts             # Etapa 4: POST
-│  │     ├─ qr/token/route.ts         # Etapa 6: GET (admin)
+│  │     ├─ consentimiento/route.ts   # Etapa 3: POST (RPC registrar_consentimiento)
+│  │     ├─ qr/token/route.ts         # Etapa 3: GET (admin)
 │  │     ├─ admin/zonas/route.ts      # Etapa 6: PATCH
 │  │     └─ admin/export/route.ts     # Etapa 6: GET CSV
 │  ├─ components/
@@ -370,18 +387,22 @@ OptiWork/
 │  │  │                               # SelectorZona, ProveedorRealtime
 │  │  ├─ scan/ConfirmacionScan.tsx
 │  │  ├─ admin/                       # FormularioZona, TablaHistorial, BotonExportCSV
+│  │  ├─ qr/QrRotativo.tsx            # Etapa 3: QR que se renueva solo
 │  │  └─ auth/                        # FormularioLogin, AvisoConsentimiento
 │  ├─ lib/
 │  │  ├─ supabase/browser.ts          # createBrowserClient
 │  │  ├─ supabase/server.ts           # createServerClient con cookies()
 │  │  ├─ supabase/admin.ts            # service_role (server-only)
-│  │  ├─ auth/session.ts guards.ts    # getCurrentUser, requireUser, requireAdmin
-│  │  ├─ qr/token.ts imagen.ts        # firmar/verificar HMAC, SVG del QR
+│  │  ├─ supabase/zonas.ts            # lectura de zonas (RLS)
+│  │  ├─ auth/session.ts guards.ts redirects.ts  # getClaims, requireUser/Admin, anti open-redirect
+│  │  ├─ qr/token.ts                  # formato + firma HMAC (puro, testeable)
+│  │  ├─ qr/imagen.ts                 # SVG del QR (servidor)
 │  │  ├─ dominio/ocupacion.ts         # calcularEstado + porcentaje (puro, testeado)
 │  │  ├─ dominio/horarios.ts          # apertura/cierre por zona y timezone
 │  │  ├─ dominio/consentimiento.ts    # versión vigente del aviso
-│  │  ├─ validacion/scan.ts zona.ts   # esquemas zod de entrada
-│  │  ├─ env.ts                       # validación zod de variables de entorno
+│  │  ├─ validacion/qr.ts consentimiento.ts scan.ts zona.ts # esquemas zod de entrada
+│  │  ├─ http/origen.ts               # comprobación de mismo origen (CSRF)
+│  │  ├─ env.ts  env.server.ts        # validación zod de variables de entorno
 │  │  ├─ rate-limit.ts                # Upstash (+ fallback local en dev)
 │  │  └─ csv.ts  cn.ts                # exportación y clases
 │  └─ types/

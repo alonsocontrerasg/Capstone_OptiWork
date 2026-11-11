@@ -40,6 +40,10 @@
 | S-22 | Comparación de firmas HMAC por `digest` (bytea de 32 bytes) | 2 |
 | S-23 | k-anonimato por **personas distintas**, rango de 1..90 días alineado a medianoche de la zona | 2 · 5 |
 | S-24 | Permanencia solo con `cierre = 'usuario'`; `salida_at` del cierre auto acotada a 8 h | 2 · 5 |
+| S-25 | Consentimiento informado como condición para registrar entradas y salidas | 3 |
+| S-26 | Token QR firmado solo en el servidor y entregado ya renderizado | 3 |
+| S-27 | Guards con `getClaims()` + rol leído de `profiles` en cada llamada; `next` saneado | 3 |
+| S-28 | `signout` solo por `POST` y verificación de origen en las mutaciones | 3 |
 
 ---
 
@@ -262,6 +266,19 @@ página.
 
 **Tradeoff.** Un nonce obliga a renderizado dinámico; y una CSP mal calibrada rompe estilos inline de
 Tailwind o el WebSocket de Realtime, por lo que se prueba en desarrollo antes de fijarla.
+
+**Nota de revisión (Etapa 3) — nonce vs. PPR.** Al implementarla se confirmó en la guía oficial
+(`node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`) que **el nonce es
+incompatible con PPR**: un documento prerenderizado se sirve desde la caché con un nonce ya gastado
+(o sin nonce), así que sus scripts quedan bloqueados. Las alternativas eran (a) `'unsafe-inline'` en
+`script-src`, que anula la protección anti-XSS que motiva S-10, o (b) SRI experimental, que en Next 16
+está atado a los mismos prerenderizados. Se eligió **mantener la CSP estricta y desactivar PPR**:
+se quitaron `cacheComponents: true` y `partialPrefetching: true` de `next.config.ts`, y todas las
+rutas quedan dinámicas (`ƒ` en el build). El costo es no prerenderizar el shell estático; en esta app
+es marginal porque cada ruta lee sesión, ocupación o configuración viva. Además, `not-found.tsx` y
+`forbidden.tsx` llaman a `connection()` para no quedar prerenderizados y romper la CSP sin que se
+note. En desarrollo se relajan **solo** `'unsafe-eval'` (HMR) y `'unsafe-inline'` en `style-src`
+(overlay de errores); producción no tiene ninguna de las dos, y eso se verifica en el build.
 
 ### S-11 · Minimización de datos, retención de 90 días y agregados
 
@@ -670,17 +687,131 @@ el token esté vigente, un escaneo fuera del radio del Hub se rechaza. Está pre
 
 ---
 
+## Etapa 3 — Autenticación y tokens QR
+
+### S-25 · El consentimiento informado es condición para registrar un escaneo
+
+**Decisión.** Se agregó el valor `sin_consentimiento` al enum `resultado_scan` y un gate al principio
+de `registrar_scan`: si `profiles.consentimiento_at` es `NULL`, la función devuelve
+`sin_consentimiento` **antes de cualquier escritura** (tampoco deja fila en `eventos_scan`). La
+aceptación se guarda con una RPC dedicada, `registrar_consentimiento(p_version)`, que toma el
+`user_id` de `auth.uid()` y es la única vía de escritura sobre esas columnas.
+
+**Amenaza.** Tratar datos personales (horarios de entrada y salida) sin base legal ni aviso, lo que
+la Ley 21.719 sanciona. Además, un gate solo en la interfaz se salta con DevTools o llamando la RPC
+directamente: el consentimiento tiene que ser una precondición del servidor.
+
+**Por qué esta solución.** El gate vive en la misma RPC `SECURITY DEFINER` que ya era la única puerta
+de escritura, así que no hay forma de registrar una sesión sin consentimiento, ni con la `anon key`.
+Devolver un enum en vez de lanzar una excepción mantiene el contrato de la RPC (todos los resultados
+son estados de negocio) y permite mostrar un mensaje claro. La interfaz usa **el mismo criterio**
+(`consentimiento_at IS NOT NULL`, en `src/lib/dominio/consentimiento.ts`) para no ofrecer un botón que
+el servidor va a rechazar. La versión se versiona aparte (`consentimiento_version`) y el borde exige
+que coincida con la que se mostró, para no registrar la aceptación de un texto que nadie leyó.
+
+**Dónde se implementa.** `supabase/migrations/20261110000000_consentimiento_y_scan.sql`,
+`src/app/api/consentimiento/route.ts`, `src/components/auth/AvisoConsentimiento.tsx`,
+`src/lib/dominio/consentimiento.ts`.
+
+**Tradeoff.** Un usuario sin consentimiento queda fuera del sistema (el dashboard público le sigue
+funcionando). El `ALTER TYPE ... ADD VALUE` no se puede usar en la misma transacción en la que se
+agrega: la migración lo deja en un bloque aislado al inicio y obliga a ejecutarlo primero. Si en el
+futuro cambia el texto, hay que subir `CONSENTIMIENTO_VERSION` **y** agregar la comparación de
+versión en la RPC; hoy "tener consentimiento" es solo "tener fecha de aceptación".
+
+### S-26 · El token del QR se firma solo en el servidor y se entrega ya renderizado
+
+**Decisión.** `GET /api/qr/token` (solo admin) calcula la ventana, arma `v1.<zona>.<modo>.<ventana>`,
+firma con HMAC-SHA256 (Web Crypto) usando `QR_TOKEN_SECRET` y devuelve el **SVG ya generado** con
+`qrcode`, además del token y los segundos restantes. El secreto vive en `src/lib/env.server.ts`, que
+está marcado `import "server-only"`; `src/lib/qr/token.ts` no lee variables de entorno: recibe el
+secreto como argumento.
+
+**Amenaza.** Si la firma ocurriera en el navegador, la clave HMAC tendría que viajar al cliente (o
+estar en una variable `NEXT_PUBLIC_`), y cualquiera podría emitir tokens válidos desde su casa: el QR
+rotativo dejaría de probar presencia física.
+
+**Por qué esta solución.** Firmar en el servidor mantiene la clave fuera del bundle, y `server-only`
+convierte un import accidental desde un Client Component en un error de build en vez de una filtración
+silenciosa. Devolver el SVG evita exponer la URL canjeable como texto manipulable en el DOM. La
+tolerancia de una ventana anterior (≈90 s en total) es la mínima que absorbe el retraso real de un
+escaneo con cámara nativa, y la verificación de la firma sigue ocurriendo en Postgres (S-16), así que
+un token fabricado sin el secreto no pasa de la RPC.
+
+**Dónde se implementa.** `src/app/api/qr/token/route.ts`, `src/lib/qr/token.ts`, `src/lib/qr/imagen.ts`,
+`src/components/qr/QrRotativo.tsx`, `src/lib/env.server.ts`.
+
+**Tradeoff.** El admin que abre `/qr` recibe tokens válidos en su navegador (tiene el rol, es de
+confianza). Rotar `QR_TOKEN_SECRET` invalida todos los QR emitidos al instante, así que hay que rotarlo
+también en `app_secrets`; si solo se rota uno de los dos, todos los escaneos fallan con
+`token_expirado` (falla cerrado, pero rompe el check-in).
+
+### S-27 · Autorización con `getClaims()` y rol leído de `profiles`; `next` saneado
+
+**Decisión.** `src/lib/auth/guards.ts` expone `requireUser`, `requireConsentimiento` y `requireAdmin`.
+Todos usan `supabase.auth.getClaims()` (nunca `getSession()`) y `requireAdmin` consulta
+`profiles.rol` **en cada llamada**, sin cachear el rol entre peticiones. Sin sesión → `redirect` a
+`/login?next=…`; con sesión sin permiso → `forbidden()` (403). El parámetro `next` de
+`/auth/callback` pasa por `normalizarDestinoInterno`, que solo acepta rutas internas.
+
+**Amenaza.** (a) Sesión falsificada: `getSession()` devuelve el contenido de la cookie sin verificar la
+firma, así que un token manipulado a mano se tomaría como usuario válido. (b) Escalada de privilegios:
+un JWT con `role: admin` o un rol que el usuario ya no tiene. (c) *Open redirect*: un enlace de correo
+legítimo con `?next=https://otro-sitio` usado para phishing.
+
+**Por qué esta solución.** `getClaims()` valida la firma del JWT (o la delega a Auth si el proyecto
+usa firma simétrica); `getUser()` daría la misma garantía con una llamada de red más por request.
+Leer el rol de `profiles` en cada llamada hace que quitar permisos tenga efecto inmediato y que el
+`role` del token sea irrelevante (el token no decide nada). Para `next` se exige que empiece con `/`,
+que no sea `//` ni contenga `\` o caracteres de control, y se verifica con `new URL()` que el origen no
+cambie; cualquier intento cae al destino por defecto. Los guards se ejecutan en la página o el Route
+Handler, no en el proxy: así no hay rutas "olvidadas" fuera del matcher y no se depende de un control
+que la documentación de Next desaconseja para autorización.
+
+**Dónde se implementa.** `src/lib/auth/session.ts`, `src/lib/auth/guards.ts`,
+`src/lib/auth/redirects.ts`, `src/app/qr/page.tsx`, `src/app/api/qr/token/route.ts`,
+`src/app/auth/callback/route.ts`.
+
+**Tradeoff.** Una consulta extra a `profiles` por render protegido (barata, con índice por PK) y una
+redirección visible a `/login` en lugar de un 401 elegante. La página `/qr` y su API repiten el guard,
+que es intencional: la API no confía en que solo la página la llame.
+
+### S-28 · `signout` solo por `POST` y verificación de origen en las mutaciones
+
+**Decisión.** `/auth/signout` acepta únicamente `POST` y responde `303` a `/login`. Tanto esa ruta
+como `POST /api/consentimiento` empiezan con `peticionDelMismoOrigen(request)`: si viene `Origin`, se
+compara con el origen de la petición; si no, se exige `Sec-Fetch-Site: same-origin|none`. Un GET a
+`/auth/signout` devuelve 405.
+
+**Amenaza.** *CSRF de logout*: cualquier página puede incrustar `<img src="https://app/auth/signout">`
+y desconectar al usuario (o forzarlo a repetir el ingreso). *CSRF en mutaciones*: los Route Handlers
+no tienen la protección que Next aplica a las Server Actions, así que un formulario en otro sitio
+podría enviar `{version: 1}` en nombre del usuario y registrar un consentimiento que no otorgó.
+
+**Por qué esta solución.** Cambiar el verbo quita la superficie más barata (una imagen o un enlace
+precargado ya no dispara la acción) y la comprobación de origen bloquea el POST cross-site incluso si
+el navegador envía las cookies de sesión, que es justo lo que `SameSite=Lax` no cubre en todos los
+casos. Se implementó como helper compartido para que la Etapa 4 lo reutilice en `/api/scan` sin
+reinventarlo.
+
+**Dónde se implementa.** `src/app/auth/signout/route.ts`, `src/app/api/consentimiento/route.ts`,
+`src/lib/http/origen.ts`.
+
+**Tradeoff.** Los clientes que no envían `Origin` ni `Sec-Fetch-Site` (curl, scripts) reciben 403; es
+aceptable porque esas rutas son para el navegador. La comprobación depende de que el despliegue no
+reescriba el host (`NEXT_PUBLIC_SITE_URL` y el dominio real deben coincidir).
+
+---
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
 | --- | --- |
 | Tests automáticos de RLS (comportamiento con usuarios reales) | 6 |
-| Autorización de `/qr` y `/admin` (guard de rol, respuesta 403 sin filtrar datos) | 3 · 6 |
-| Gestión del consentimiento y su versión (Ley 21.719) | 3 |
-| Rotación de `QR_TOKEN_SECRET` y su efecto en QR activos | 3 |
-| Almacenamiento de secretos en Vercel y rotación de llaves de Supabase | 3 |
+| Almacenamiento de secretos en Vercel y rotación de llaves de Supabase | 4 · 6 |
 | Seudonimización efectiva en el export CSV | 6 |
 | Resultado de los tests de RLS como evidencia para el informe | 6 |
+| Rate limiting con Upstash y su verificación en serverless | 4 |
 
 ## Control de cambios
 
@@ -690,3 +821,4 @@ el token esté vigente, un escaneo fuera del radio del Hub se rechaza. Está pre
 | 2026-11-06 | Etapa 2: esquema SQL, políticas RLS, RPC y docs (S-16 a S-20 + matriz RLS) |
 | 2026-11-08 | Revisión de las migraciones antes de aplicarlas: k=5 también en `resumen_diario` (S-21), comparación de firmas por `digest` (S-22), cierre de sesión filtrado por zona y alineación de `qr_window_seconds` con `QR_WINDOW_SECONDS` |
 | 2026-11-08 | Segunda revisión: k-anonimato por personas distintas, rango 1..90 días alineado a medianoche de la zona y límite por diferencia entre rangos (S-23); permanencia solo con `cierre = 'usuario'` y salida del cierre auto acotada a 8 h (S-24); `verificacion.sql` ampliado (privilegios de escritura de tabla, triggers y barrido de `pg_proc`) |
+| 2026-11-10 | Etapa 3: consentimiento como precondición del scan (S-25), firma del QR solo en el servidor (S-26), guards con `getClaims()` y anti open-redirect (S-27), signout por POST y mismo origen (S-28). Revisión de S-10: se desactiva PPR (`cacheComponents`) porque el nonce es incompatible con los documentos prerenderizados |

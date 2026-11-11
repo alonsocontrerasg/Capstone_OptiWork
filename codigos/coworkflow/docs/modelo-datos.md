@@ -17,6 +17,11 @@ Supabase, **en orden de nombre de archivo**, y al final se ejecuta `verificacion
 | 5 | `20261106000004_rpc_registrar_scan.sql` | RPC de check-in/check-out con HMAC |
 | 6 | `20261106000005_stats.sql` | estadísticas públicas con k-anonimato por personas distintas |
 | 7 | `20261106000006_pg_cron_jobs.sql` | snapshots, cierre automático, resumen diario y retención |
+| 8 | `20261110000000_consentimiento_y_scan.sql` | Etapa 3: `sin_consentimiento`, RPC `registrar_consentimiento` y `registrar_scan` con gate de consentimiento |
+
+> ⚠️ La migración 8 empieza con un `alter type ... add value` **aislado**: hay que seleccionarlo y
+> ejecutarlo solo, y después el resto del archivo. Postgres no permite usar un valor nuevo de un enum
+> dentro de la misma transacción en la que se agrega.
 
 Luego, en el SQL Editor:
 1. `supabase/seed.sql` → crea la zona `hub-providencia` (aforo 100, umbrales 40/80).
@@ -38,7 +43,7 @@ Luego, en el SQL Editor:
 | `public.rol_usuario` | `usuario`, `admin` |
 | `public.tipo_cierre` | `usuario`, `auto` |
 | `public.tipo_scan` | `entrada`, `salida` |
-| `public.resultado_scan` | `entrada_ok`, `salida_ok`, `sesion_ya_abierta`, `sin_sesion_abierta`, `cooldown`, `demasiados_intentos`, `token_expirado`, `token_invalido`, `no_autenticado`, `fuera_horario`, `zona_inactiva`, `rate_limited` |
+| `public.resultado_scan` | `entrada_ok`, `salida_ok`, `sesion_ya_abierta`, `sin_sesion_abierta`, `cooldown`, `demasiados_intentos`, `token_expirado`, `token_invalido`, `no_autenticado`, `fuera_horario`, `zona_inactiva`, `rate_limited`, `sin_consentimiento` |
 
 ## Tablas
 
@@ -47,7 +52,7 @@ Luego, en el SQL Editor:
 |---------|------|-------|
 | `id` | `uuid` PK | `references auth.users(id) on delete cascade` |
 | `rol` | `rol_usuario` | `not null default 'usuario'`; protegido por trigger |
-| `consentimiento_at` | `timestamptz` | se llenará en Etapa 3 (RPC de consentimiento) |
+| `consentimiento_at` | `timestamptz` | `NULL` = no aceptó. Lo escribe la RPC `registrar_consentimiento` (Etapa 3) |
 | `consentimiento_version` | `integer` | versión del aviso aceptado |
 | `creado_at` | `timestamptz` | `default now()` |
 
@@ -161,7 +166,8 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 
 | Función | `anon` | `authenticated` | Uso |
 |---------|:------:|:---------------:|-----|
-| `registrar_scan(text)` | ✗ | ✓ | RPC de check-in/check-out |
+| `registrar_scan(text)` | ✗ | ✓ | RPC de check-in/check-out (exige consentimiento) |
+| `registrar_consentimiento(integer)` | ✗ | ✓ | registra la aceptación del aviso (Ley 21.719) |
 | `es_admin()` | ✗ | ✓ | helper RLS |
 | `permanencia_promedio(...)` | ✓ | ✓ | estadística pública (solo `cierre = 'usuario'`) |
 | `personas_distintas(...)` | ✓ | ✓ | estadística pública (`count(distinct user_id)`) |
@@ -178,6 +184,24 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 
 Los horarios son en UTC; `10 5 * * *` cae después de medianoche en Chile (UTC-3/-4),
 así el resumen del día anterior ya está completo.
+
+## Reglas de `registrar_scan`
+
+Orden de verificación dentro de la RPC (todo en una transacción):
+
+1. `auth.uid()` presente → si no, `no_autenticado` (no escribe nada).
+2. **Consentimiento**: si `profiles.consentimiento_at` es `NULL` → `sin_consentimiento` (no escribe
+   nada, ni siquiera en `eventos_scan`). Es un gate previo, no un resultado de intento.
+3. Límite de 10 intentos inválidos por minuto → `demasiados_intentos`.
+4. Firma HMAC y formato del token → `token_invalido`.
+5. Ventana actual o anterior → `token_expirado`.
+6. Zona activa / horario → `zona_inactiva`, `fuera_horario`.
+7. Cooldown de 30 s → `cooldown`.
+8. Reglas de sesión → `sesion_ya_abierta`, `sin_sesion_abierta`, o `entrada_ok` / `salida_ok`.
+
+La versión 2 de la RPC (`20261110000000_consentimiento_y_scan.sql`) es una copia exacta de la
+migración 5 con **una sola** adición: el paso 2. Se mantuvo todo lo demás igual (incluido el orden y
+los comentarios) para que el diff sea auditable.
 
 ## Formato del token QR (contrato con Etapa 3)
 
@@ -259,6 +283,42 @@ where id = (select id from auth.users where email = 'tu@email.com');
 
 Esto funciona porque `proteger_rol` solo bloquea JWT `authenticated`/`anon`; el SQL Editor
 corre sin JWT y por tanto puede cambiar el rol.
+
+### 3b. Aplicar la migración 8 (Etapa 3)
+
+1. Abre `20261110000000_consentimiento_y_scan.sql`, selecciona **solo** el
+   `alter type public.resultado_scan add value if not exists 'sin_consentimiento';` y ejecútalo.
+2. Ejecuta el resto del archivo (la RPC `registrar_consentimiento` y la nueva versión de
+   `registrar_scan`).
+3. Verifica que el enum quedó con el valor nuevo:
+
+```sql
+select unnest(enum_range(null::public.resultado_scan))::text as valor;
+```
+
+Si se ejecuta todo junto, Postgres responde `unsafe use of new value of enum type` y hay que repetir
+el paso 1 por separado. Es idempotente: volver a ejecutarlo no cambia nada.
+
+Usuarios que ya existían quedan con `consentimiento_at = NULL`, así que la app les pedirá aceptar el
+aviso antes de marcar entrada/salida (`sin_consentimiento` hasta entonces).
+
+### 3c. Configurar Auth en Supabase (Etapa 3)
+
+En **Authentication → URL Configuration**:
+
+- **Site URL**: `http://localhost:3000` en local, o el dominio de Vercel en producción.
+- **Redirect URLs**: agrega `http://localhost:3000/auth/callback` y
+  `https://<tu-dominio>/auth/callback`. Si faltan, Supabase rechaza el `emailRedirectTo` y el
+  enlace mágico vuelve a la Site URL sin canjear el código.
+
+En **Authentication → Providers → Email**:
+
+- El **enlace mágico** funciona con el correo de Supabase, pero su plan gratuito limita los envíos
+  por hora; para la demo conviene configurar SMTP propio (Resend) o usar la vía de contraseña.
+- Con contraseña, deja **Confirm email** activo: así el registro no crea sesión hasta confirmar.
+
+Rutas que expone la app en esta etapa: `/login`, `/auth/callback`, `/auth/signout` (solo `POST`),
+`/api/consentimiento` (`POST`), `/qr` y `/api/qr/token` (`GET`, solo admin).
 
 ### 4. Verificar
 Ejecuta `supabase/verificacion.sql`. Debe terminar con `NOTICE: Verificación OK ...`.
