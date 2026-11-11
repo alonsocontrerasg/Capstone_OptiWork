@@ -3,9 +3,30 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { crearClienteNavegador } from "@/lib/supabase/browser";
+import { normalizarDestinoInterno } from "@/lib/auth/redirects";
+import { PASSWORD_MIN_LENGTH } from "@/lib/dominio/auth";
 
 type Modo = "enlace" | "contrasena" | "registro";
+
+/** Códigos genéricos que devuelve `POST /auth/login` (no exponen detalles de Supabase). */
+type CodigoErrorAuth =
+  | "credenciales_invalidas"
+  | "limite_intentos"
+  | "contrasena_debil"
+  | "registro_generico"
+  | "correo_sin_confirmar"
+  | "generico";
+
+/** Respuesta de `POST /auth/login`. */
+type RespuestaAuth = {
+  ok: boolean;
+  codigo?: CodigoErrorAuth;
+  redirigir?: string;
+  aviso?: string;
+};
+
+const MENSAJE_GENERICO =
+  "No pudimos completar la operación. Inténtalo de nuevo en unos segundos.";
 
 type Props = {
   /** Ruta interna a la que volver después de iniciar sesión (ya saneada en el servidor). */
@@ -13,30 +34,51 @@ type Props = {
   mensajeInicial?: string | null;
 };
 
-/** Traduce códigos de Supabase Auth a mensajes en español sin filtrar detalles internos. */
-function traducirError(codigo: string | undefined): string {
+/** Traduce los códigos genéricos del servidor a mensajes en español. */
+function mensajeDeCodigo(codigo: CodigoErrorAuth): string {
   switch (codigo) {
-    case "invalid_credentials":
+    case "credenciales_invalidas":
       return "Correo o contraseña incorrectos.";
-    case "email_not_confirmed":
-      return "Primero confirma tu correo: revisa el enlace que te enviamos.";
-    case "over_email_send_rate_limit":
-    case "over_request_rate_limit":
+    case "limite_intentos":
       return "Demasiados intentos seguidos. Espera unos minutos y vuelve a probar.";
-    case "user_already_exists":
-    case "email_exists":
-      return "Ya existe una cuenta con ese correo. Inicia sesión.";
-    case "weak_password":
-      return "La contraseña es demasiado débil: usa al menos 8 caracteres.";
-    case "signup_disabled":
-      return "El registro está deshabilitado en este momento.";
-    case "validation_failed":
-      return "Revisa el correo y la contraseña ingresados.";
-    case "same_password":
-      return "La nueva contraseña debe ser distinta de la anterior.";
+    case "contrasena_debil":
+      return `La contraseña es demasiado débil: usa al menos ${PASSWORD_MIN_LENGTH} caracteres.`;
+    case "correo_sin_confirmar":
+      return "Primero confirma tu correo: revisa el enlace que te enviamos.";
+    case "registro_generico":
+      return "No se pudo completar el registro. Si ya tienes cuenta, inicia sesión o pide un enlace por correo.";
     default:
-      return "No pudimos completar la operación. Inténtalo de nuevo en unos segundos.";
+      return MENSAJE_GENERICO;
   }
+}
+
+/**
+ * Lee la respuesta de `POST /auth/login` sin confiar en su forma.
+ *
+ * No todo lo que llega es el JSON del handler: una guarda responde `{ error: ... }`, un proxy
+ * devuelve HTML, un 500 puede traer un cuerpo truncado. Solo se acepta un objeto JSON con `ok`
+ * booleano; en cualquier otro caso se devuelve `null` y el llamador muestra el mensaje genérico.
+ */
+async function leerRespuesta(respuesta: Response): Promise<RespuestaAuth | null> {
+  let cuerpo: unknown;
+  try {
+    cuerpo = await respuesta.json();
+  } catch {
+    return null;
+  }
+
+  if (typeof cuerpo !== "object" || cuerpo === null) return null;
+
+  const datos = cuerpo as Record<string, unknown>;
+  if (typeof datos.ok !== "boolean") return null;
+
+  return {
+    ok: datos.ok,
+    codigo:
+      typeof datos.codigo === "string" ? (datos.codigo as CodigoErrorAuth) : undefined,
+    redirigir: typeof datos.redirigir === "string" ? datos.redirigir : undefined,
+    aviso: typeof datos.aviso === "string" ? datos.aviso : undefined,
+  };
 }
 
 export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
@@ -48,66 +90,44 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
   const [error, setError] = useState<string | null>(mensajeInicial);
   const [aviso, setAviso] = useState<string | null>(null);
 
-  function urlDeVuelta(): string {
-    return `${window.location.origin}/auth/callback?next=${encodeURIComponent(destino)}`;
-  }
-
   async function manejarEnvio(evento: React.FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     setError(null);
     setAviso(null);
     setEnviando(true);
 
-    const supabase = crearClienteNavegador();
-    const email = correo.trim();
+    const cuerpo: Record<string, string> = {
+      accion: modo,
+      email: correo.trim(),
+      destino,
+    };
+    if (modo !== "enlace") cuerpo.password = contrasena;
 
     try {
-      if (modo === "enlace") {
-        const { error: errorAuth } = await supabase.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: urlDeVuelta() },
-        });
-        if (errorAuth) {
-          setError(traducirError(errorAuth.code));
-          return;
-        }
-        setAviso(
-          "Te enviamos un enlace de acceso. Ábrelo en este mismo dispositivo para entrar.",
-        );
-        return;
-      }
-
-      if (modo === "contrasena") {
-        const { error: errorAuth } = await supabase.auth.signInWithPassword({
-          email,
-          password: contrasena,
-        });
-        if (errorAuth) {
-          setError(traducirError(errorAuth.code));
-          return;
-        }
-        router.replace(destino);
-        router.refresh();
-        return;
-      }
-
-      const { data, error: errorAuth } = await supabase.auth.signUp({
-        email,
-        password: contrasena,
-        options: { emailRedirectTo: urlDeVuelta() },
+      const respuesta = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cuerpo),
+        credentials: "same-origin",
       });
-      if (errorAuth) {
-        setError(traducirError(errorAuth.code));
+
+      const datos = await leerRespuesta(respuesta);
+
+      // 400/403/415/500, HTML de un proxy caído o un cuerpo sin `ok`: todo se degrada al
+      // mensaje genérico; el usuario nunca ve detalles internos ni códigos de Supabase.
+      if (!datos || !respuesta.ok || datos.ok !== true) {
+        setError(datos?.codigo ? mensajeDeCodigo(datos.codigo) : MENSAJE_GENERICO);
         return;
       }
-      if (data.session) {
-        router.replace(destino);
+
+      if (datos.redirigir) {
+        // Defensa en profundidad: el servidor ya saneó el destino (S-27).
+        router.replace(normalizarDestinoInterno(datos.redirigir));
         router.refresh();
         return;
       }
-      setAviso(
-        "Cuenta creada. Revisa tu correo para confirmarla y luego vuelve a entrar.",
-      );
+
+      if (datos.aviso) setAviso(datos.aviso);
     } catch {
       setError("Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo.");
     } finally {
@@ -184,12 +204,12 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
               id="contrasena"
               type="password"
               required
-              minLength={8}
+              minLength={PASSWORD_MIN_LENGTH}
               autoComplete={modo === "registro" ? "new-password" : "current-password"}
               value={contrasena}
               onChange={(evento) => setContrasena(evento.target.value)}
               className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100"
-              placeholder="Mínimo 8 caracteres"
+              placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres`}
             />
           </div>
         )}

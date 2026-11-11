@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { envPublico, origenSupabase } from "@/lib/env";
+import { OPCIONES_COOKIE, conOpcionesSeguras } from "@/lib/supabase/cookies";
 
 /**
  * Proxy (antes `middleware.ts`, deprecado en Next 16).
@@ -10,6 +11,8 @@ import { envPublico, origenSupabase } from "@/lib/env";
  *
  * 1. **Refresca la sesión de Supabase** y reescribe las cookies en la respuesta. Sin esto,
  *    el access token caduca y el usuario aparece deslogueado a mitad de navegación (S-09).
+ *    Las cookies se reescriben forzando `httpOnly`, `sameSite: 'lax'` y `secure` en
+ *    producción (`OPCIONES_COOKIE`), porque `@supabase/ssr` las propone sin `httpOnly`.
  * 2. **Aplica la CSP con nonce** (S-10). El nonce se genera por request, se pone en la
  *    cabecera de *petición* (`Content-Security-Policy`) para que Next lo estampe en sus
  *    `<script>` inline, y se repite en la respuesta.
@@ -107,6 +110,7 @@ export async function proxy(request: NextRequest) {
     envPublico.NEXT_PUBLIC_SUPABASE_URL,
     envPublico.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
+      cookieOptions: OPCIONES_COOKIE,
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -122,7 +126,7 @@ export async function proxy(request: NextRequest) {
 
           respuesta = siguiente();
           for (const { name, value, options } of cookiesAEscribir) {
-            respuesta.cookies.set(name, value, options);
+            respuesta.cookies.set(name, value, conOpcionesSeguras(options));
           }
           // Cabeceras anti-caché que exige @supabase/ssr cuando escribe cookies de sesión.
           for (const [nombre, valor] of Object.entries(cabecerasDeCache)) {

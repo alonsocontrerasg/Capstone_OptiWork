@@ -365,6 +365,7 @@ OptiWork/
 │  ├─ app/
 │  │  ├─ layout.tsx  page.tsx  globals.css  error.tsx  not-found.tsx  forbidden.tsx
 │  │  ├─ login/page.tsx               # Etapa 3
+│  │  ├─ auth/login/route.ts          # Etapa 3: login/registro/magic link en el servidor
 │  │  ├─ auth/callback/route.ts       # Etapa 3: magic link → cookies
 │  │  ├─ auth/signout/route.ts        # Etapa 3
 │  │  ├─ scan/page.tsx                # Etapa 4
@@ -390,17 +391,18 @@ OptiWork/
 │  │  ├─ qr/QrRotativo.tsx            # Etapa 3: QR que se renueva solo
 │  │  └─ auth/                        # FormularioLogin, AvisoConsentimiento
 │  ├─ lib/
-│  │  ├─ supabase/browser.ts          # createBrowserClient
 │  │  ├─ supabase/server.ts           # createServerClient con cookies()
+│  │  ├─ supabase/cookies.ts          # opciones de cookie httpOnly/secure (S-09)
 │  │  ├─ supabase/admin.ts            # service_role (server-only)
 │  │  ├─ supabase/zonas.ts            # lectura de zonas (RLS)
-│  │  ├─ auth/session.ts guards.ts redirects.ts  # getClaims, requireUser/Admin, anti open-redirect
+│  │  ├─ auth/session.ts guards.ts redirects.ts acciones.ts  # getClaims, guards, anti open-redirect, login en servidor
 │  │  ├─ qr/token.ts                  # formato + firma HMAC (puro, testeable)
 │  │  ├─ qr/imagen.ts                 # SVG del QR (servidor)
 │  │  ├─ dominio/ocupacion.ts         # calcularEstado + porcentaje (puro, testeado)
 │  │  ├─ dominio/horarios.ts          # apertura/cierre por zona y timezone
 │  │  ├─ dominio/consentimiento.ts    # versión vigente del aviso
-│  │  ├─ validacion/qr.ts consentimiento.ts scan.ts zona.ts # esquemas zod de entrada
+│  │  ├─ dominio/auth.ts              # mínimo de contraseña (compartido con el formulario)
+│  │  ├─ validacion/qr.ts consentimiento.ts scan.ts zona.ts auth.ts # esquemas zod de entrada
 │  │  ├─ http/origen.ts               # comprobación de mismo origen (CSRF)
 │  │  ├─ env.ts  env.server.ts        # validación zod de variables de entorno
 │  │  ├─ rate-limit.ts                # Upstash (+ fallback local en dev)

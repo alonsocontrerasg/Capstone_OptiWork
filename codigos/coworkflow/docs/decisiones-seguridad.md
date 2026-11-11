@@ -44,6 +44,7 @@
 | S-26 | Token QR firmado solo en el servidor y entregado ya renderizado | 3 |
 | S-27 | Guards con `getClaims()` + rol leído de `profiles` en cada llamada; `next` saneado | 3 |
 | S-28 | `signout` solo por `POST` y verificación de origen en las mutaciones | 3 |
+| S-29 | Login en el servidor: errores genéricos (anti-enumeración) y TODO de rate limit | 3 |
 
 ---
 
@@ -238,10 +239,31 @@ puede hacer acciones en la página pero no exportar la credencial. `@supabase/ss
 oficial para App Router: mantiene el par de tokens sincronizado entre servidor y cliente sin
 exponerlos al DOM.
 
-**Dónde se implementa.** `src/lib/supabase/{browser,server}.ts` y `src/proxy.ts` (Etapa 3).
+**Dónde se implementa.** `src/lib/supabase/server.ts`, `src/lib/supabase/cookies.ts`,
+`src/app/auth/login/route.ts` y `src/proxy.ts` (Etapa 3; ver nota de revisión).
 
 **Tradeoff.** Toda lectura de sesión es dinámica (no se puede prerenderizar) y debe vivir detrás de
 `<Suspense>`; es una consecuencia aceptada de `cacheComponents`.
+
+**Nota de revisión (Etapa 3) — las cookies no eran realmente httpOnly.** Al inspeccionar la sesión
+en DevTools se comprobó que las cookies `sb-*` salían **sin** `HttpOnly`. La causa: el inicio de
+sesión se hacía en el navegador con `createBrowserClient`, y `@supabase/ssr` define `httpOnly: false`
+por defecto (`DEFAULT_COOKIE_OPTIONS`) porque `document.cookie` no puede escribir cookies httpOnly.
+Por tanto, la afirmación original de S-09 **no se cumplía**.
+
+**Corrección.** `signInWithPassword`, `signUp` y `signInWithOtp` pasan a `POST /auth/login`, un Route
+Handler que usa `createServerClient`; el `setAll` de `src/lib/supabase/server.ts` y el de
+`src/proxy.ts` **fuerzan** `httpOnly: true`, `sameSite: 'lax'`, `path: '/'` y `secure` (solo en
+producción). Se retira `createBrowserClient` del flujo de autenticación. El PKCE del enlace mágico
+sigue funcionando: el `code_verifier` se guarda en una cookie httpOnly emitida por el servidor y se
+canjea en `/auth/callback` con `exchangeCodeForSession`.
+
+**Amenaza que se cierra.** Un XSS ya no puede leer el token de sesión desde `document.cookie` y
+exfiltrarlo: es el mismo objetivo de S-09, ahora sí implementado.
+
+**Tradeoff.** El login hace un `fetch` POST adicional al propio servidor (antes iba directo a
+Supabase) y el redirect del enlace mágico depende de que `NEXT_PUBLIC_SITE_URL` coincida con el
+dominio real.
 
 ### S-10 · CSP con nonce, HSTS y solo HTTPS
 
@@ -801,6 +823,61 @@ reinventarlo.
 aceptable porque esas rutas son para el navegador. La comprobación depende de que el despliegue no
 reescriba el host (`NEXT_PUBLIC_SITE_URL` y el dominio real deben coincidir).
 
+### S-29 · Login en el servidor: errores de autenticación genéricos y TODO de rate limit
+
+**Decisión.** `POST /auth/login` devuelve códigos de error genéricos que **no** revelan si un correo
+está registrado: el registro fallido responde siempre «No se pudo completar el registro. Si ya tienes
+cuenta, inicia sesión o pide un enlace por correo», y el login con contraseña usa
+`credenciales_invalidas` para correo o contraseña erróneos (no distingue cuál falló). El endpoint exige
+`Content-Type: application/json` además de la verificación de mismo origen (S-28) y valida el cuerpo
+con zod (S-15). El mínimo de contraseña en zod es **10**, igual que el configurado en Supabase Auth, y
+`weak_password` tiene su propio mensaje. El `emailRedirectTo` del enlace mágico se arma con
+`NEXT_PUBLIC_SITE_URL` (validada al arrancar), nunca con `request.url` ni la cabecera `Host`.
+
+**Amenaza.** *Enumeración de cuentas*: si el registro respondiera «ese correo ya existe», un atacante
+podría averiguar qué personas tienen cuenta probando correos, lo que ya es un dato personal y facilita
+ataques dirigidos (phishing, credential stuffing). *Envenenamiento de `Host`*: construir el redirect
+del correo desde la cabecera `Host` permitiría desviar el enlace mágico a un dominio controlado por el
+atacante.
+
+**Por qué esta solución.** Al mover la autenticación al servidor, los mensajes se generan en un solo
+punto y no dependen de que el navegador traduzca bien los códigos de Supabase. Los códigos propios
+(no los de Supabase) evitan que un cambio de la librería filtre un mensaje distinto para «cuenta
+inexistente» o «contraseña incorrecta». El `emailRedirectTo` se calcula con la URL pública validada,
+así que una cabecera falsificada no cambia el destino del correo.
+
+**Rate limit pendiente (Etapa 4).** `POST /auth/login` deja un `TODO` explícito para aplicar rate
+limit por IP y por correo reutilizando el limitador de `src/lib/rate-limit.ts` (S-08). Mientras no
+exista, hay que tener en cuenta que los límites de Supabase Auth pasan a ser **globales para el
+proyecto**: como las peticiones salen del servidor (Vercel), Supabase ve la IP del servidor y no la
+del usuario, así que su límite por IP agrupa a todos los usuarios. Por eso el rate limit propio de la
+app es imprescindible antes de producción.
+
+**Alcance real de la anti-enumeración (limitación conocida en desarrollo).** La igualdad de respuestas
+solo es completa con **«Confirm email» activado** en Supabase Auth. Con la confirmación **desactivada**,
+`signUp` devuelve sesión de inmediato cuando el correo es nuevo, mientras que con un correo ya
+registrado no devuelve sesión y el endpoint responde con el mensaje genérico de registro: esa
+diferencia (hay sesión / no la hay) **revela qué correos tienen cuenta**. Es una limitación conocida y
+aceptada **en desarrollo**, donde la confirmación se apaga para no gastar los envíos limitados del plan
+gratuito; antes de producción hay que activar «Confirm email» o dejar de distinguir los dos casos
+(responder siempre con el aviso neutro del enlace mágico, sin iniciar sesión desde el registro).
+
+**Errores inesperados y logs.** La llamada a `ejecutarAccionAuth` va dentro de `try/catch`: si lanza
+(Supabase 5xx, red, bug de la librería) el endpoint responde `500` con `{ ok: false, codigo: "generico" }`
+y `Cache-Control: no-store`, y registra **solo `error.name`**. Nunca se registra el correo, la contraseña
+ni el objeto de error completo: el cuerpo de la petición contiene credenciales y los errores de las
+librerías suelen arrastrar el payload en `details`/`cause`, así que escribirlos en los logs de Vercel
+sería una fuga de credenciales y de datos personales (Ley 21.719). Por la misma razón el cliente
+(`FormularioLogin`) tolera cualquier respuesta que no sea un JSON con `ok` booleano —incluidos 400,
+403, 415 y 500— y muestra el mensaje genérico, sin reflejar el texto del servidor.
+
+**Dónde se implementa.** `src/app/auth/login/route.ts`, `src/lib/auth/acciones.ts`,
+`src/lib/validacion/auth.ts`, `src/lib/dominio/auth.ts`, `src/lib/supabase/cookies.ts`.
+
+**Tradeoff.** Los mensajes genéricos empeoran ligeramente la experiencia de registro, y el rate limit
+propio queda pendiente de la Etapa 4 (hasta entonces, el endpoint depende de los límites globales de
+Supabase).
+
 ---
 
 ## Pendientes de documentar en las próximas etapas
@@ -822,3 +899,5 @@ reescriba el host (`NEXT_PUBLIC_SITE_URL` y el dominio real deben coincidir).
 | 2026-11-08 | Revisión de las migraciones antes de aplicarlas: k=5 también en `resumen_diario` (S-21), comparación de firmas por `digest` (S-22), cierre de sesión filtrado por zona y alineación de `qr_window_seconds` con `QR_WINDOW_SECONDS` |
 | 2026-11-08 | Segunda revisión: k-anonimato por personas distintas, rango 1..90 días alineado a medianoche de la zona y límite por diferencia entre rangos (S-23); permanencia solo con `cierre = 'usuario'` y salida del cierre auto acotada a 8 h (S-24); `verificacion.sql` ampliado (privilegios de escritura de tabla, triggers y barrido de `pg_proc`) |
 | 2026-11-10 | Etapa 3: consentimiento como precondición del scan (S-25), firma del QR solo en el servidor (S-26), guards con `getClaims()` y anti open-redirect (S-27), signout por POST y mismo origen (S-28). Revisión de S-10: se desactiva PPR (`cacheComponents`) porque el nonce es incompatible con los documentos prerenderizados |
+| 2026-11-10 | Revisión de S-09: el login se mueve al servidor para que las cookies `sb-*` sean realmente httpOnly; S-29 añadido (errores de auth genéricos, anti-enumeración y TODO de rate limit) |
+| 2026-11-10 | Endurecimiento de S-29: `try/catch` en `/auth/login` que responde `generico` y registra solo `error.name`, cliente tolerante a respuestas no JSON, y se documenta que la anti-enumeración solo es completa con «Confirm email» activado |
