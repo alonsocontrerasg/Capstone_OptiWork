@@ -164,16 +164,27 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
 | `sin_sesion_abierta` | 409 | «No tienes una entrada activa» |
 | `sin_consentimiento` | 403 | «Acepta el aviso de privacidad para marcar tu asistencia» |
 | `cooldown` | 429 | «Espera unos segundos antes de volver a escanear» |
+| `demasiados_intentos` | 429 | «Demasiados intentos seguidos. Espera un minuto y vuelve a intentar.» |
 | `token_invalido` / `token_expirado` | 403 | «El código venció, escanea el QR nuevamente» |
 | `fuera_horario` | 409 | «El cowork está cerrado» |
 | `zona_inactiva` | 409 | «Esta zona no está habilitada» |
 | `rate_limited` | 429 | «Demasiados intentos» |
 | `no_autenticado` | 401 | «Inicia sesión y vuelve a escanear» |
 
+El mapeo vive en `src/lib/dominio/scan.ts` (`MAPA_RESULTADO_SCAN`, exhaustivo respecto de
+`RESULTADOS_SCAN`; un valor desconocido devuelve 500 genérico, `S-33`). Hay dos 429 que llegan por
+caminos distintos: `demasiados_intentos` lo devuelve la **RPC** (cuenta eventos con `resultado` distinto
+de `entrada_ok`/`salida_ok` en el último minuto y, con 10 ya registrados, rechaza el intento siguiente
+sin dejar fila) y `rate_limited` lo genera el **borde** cuando Upstash niega el cupo (60/min por IP o
+10/min por usuario) antes de llamar a la RPC (`S-30`).
+
 ### 5.2 QR rotativo (`/qr`, solo admin)
 
 - Página protegida por `requireAdmin()` (guard de la propia página, no del proxy): sin sesión →
   `/login?next=/qr`; con sesión pero sin rol → `forbidden()` (403 en `forbidden.tsx`).
+  `requireAdmin()` se apoya en `getClaims()`, que valida firma y expiración pero **no** la revocación:
+  una sesión de admin revocada pero no vencida puede seguir emitiendo QR hasta que expire su JWT (hasta
+  1 h). Mitigación prevista en la Etapa 6: que use `getUser()` (ver `S-36`).
 - Muestra **dos QR a la vez** (Entrada y Salida) de la zona elegida con `?zona=<slug>`; si hay una
   sola zona activa no aparece selector.
 - El cliente pide `GET /api/qr/token?zona=<slug>&modo=<entrada|salida>` al montar y cada vez que la
@@ -330,10 +341,10 @@ por git.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Pública | Cliente de navegador; su poder lo limita RLS |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Secreta, solo servidor** | Scripts locales y tareas admin; ignora RLS |
 | `NEXT_PUBLIC_SITE_URL` | Pública | Redirect del magic link y URLs impresas en los QR |
-| `QR_TOKEN_SECRET` | **Secreta, solo servidor** | Firma HMAC de los tokens de QR: **exactamente 64 hex** (32 bytes, `openssl rand -hex 32`) y el mismo valor que `app_secrets.qr_token_secret` |
+| `QR_TOKEN_SECRET` | **Secreta, solo servidor** | Firma HMAC de los tokens de QR y clave de los hashes de IP y correo del rate limit: **exactamente 64 hex** (`openssl rand -hex 32` = 256 bits). La clave es el **texto** del secreto (64 bytes UTF-8), no los 32 bytes decodificados, y es el mismo valor que `app_secrets.qr_token_secret` |
 | `QR_WINDOW_SECONDS` | Config | Duración de la ventana del QR (45 por defecto); debe coincidir con `app_secrets.qr_window_seconds` |
 | `NEXT_PUBLIC_ZONA_POR_DEFECTO` | Pública | Slug usado cuando la URL no trae `?zona=` |
-| `UPSTASH_REDIS_REST_URL` / `…_TOKEN` | **Secretas** | Rate limiting (Etapa 4); opcionales en local, **obligatorias en producción** |
+| `UPSTASH_REDIS_REST_URL` / `…_TOKEN` | **Secretas** | Rate limiting (Etapa 4) en `/api/scan` y `/auth/login`; opcionales en local (contador en memoria), **obligatorias en producción** (sin ellas esas dos rutas fallan cerradas con 500) |
 
 Reglas: ninguna variable secreta lleva prefijo `NEXT_PUBLIC_` (Next las incrusta en el bundle del
 navegador en build-time); `src/lib/env.ts` valida las públicas y `src/lib/env.server.ts` las secretas
@@ -342,6 +353,12 @@ caracteres hex. `env.server.ts` está marcado `server-only`: un import desde un 
 el build en vez de filtrar la clave. La falta de Upstash se valida **al usar el rate limiter** (no al
 importar), para no exigir el servicio durante `next build`; en producción lanza y el endpoint falla
 cerrado.
+
+**Antes de desplegar.** Cargar `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN` en Vercel tanto en
+**Production** como en **Preview**: las previews corren con `NODE_ENV=production`, así que sin esas
+variables `credencialesUpstash()` lanza y `/api/scan` y `/auth/login` responden 500 (falla cerrada,
+`S-30`). El rate limit no se aplica en `/qr` ni en `/api/qr/token`: el abuso de esa ruta lo acota el
+guard de admin y el token de vida corta.
 
 ## 10. Estructura de carpetas
 
@@ -463,7 +480,7 @@ aditivas.
 | Supabase: conexiones Realtime | ~200 concurrentes | Alcanza para el cowork y varias pantallas | Un canal por zona; cerrarlo al desmontar (`removeChannel`) |
 | Supabase: mensajes Realtime | millones/mes | Un `UPDATE` por scan, no por segundo | Solo `ocupacion_actual` se publica |
 | Supabase: base de datos | 500 MB | `snapshots` = 288 filas/día/zona | Particionar por mes o purgar snapshots > 24 meses |
-| Upstash Redis | ~10k comandos/día | ~3 scans/día/usuario con 3 comandos cada uno | Rate limit solo en `/api/scan` y `/api/qr/token`, no en lecturas |
+| Upstash Redis | ~10k comandos/día | ~3 scans/día/usuario con 3 comandos cada uno | Rate limit solo en `/api/scan` y `/auth/login`, no en lecturas |
 | Vercel Hobby | 100 GB de banda, invocaciones limitadas | RSC + `use cache` reducen invocaciones | Config de zona cacheada; dashboard con dato inicial estático |
 | Correo Supabase | ~2–4 emails/hora | Magic link se agota rápido | Contraseña como alternativa + SMTP propio (Resend) |
 
@@ -517,7 +534,7 @@ formato, para que el informe final se arme por acumulación.
 | Riesgo | Impacto | Mitigación |
 | --- | --- | --- |
 | Migraciones aplicadas a mano en el SQL Editor | Drift entre repo y base | Numeración estricta, idempotencia, `supabase/verificacion.sql` después de cada pegado, registro en `docs/modelo-datos.md` |
-| El token del QR viaja en la URL y queda en logs/historial del celular | Replay dentro de la ventana | Ventanas de 45 s, tolerancia de una sola ventana anterior, rate limit + cooldown, `Referrer-Policy` restrictiva en `/scan`, y no reenviar el token al login (`S-12`) |
+| El token del QR viaja en la URL y queda en logs/historial del celular | Replay dentro de la ventana | Ventanas de 45 s, tolerancia de una sola ventana anterior, rate limit + cooldown, `Referrer-Policy: strict-origin` en `/scan` (cabecera del proxy + `meta`), `history.replaceState` al montar la confirmación para borrar `?modo` y `?t` de la barra de direcciones, y no reenviar el token al login (`S-12`, `S-32`) |
 | Foto del QR tomada dentro del cowork y usada a distancia | Entrada sin presencia física | Ventana corta + cooldown; el fallback definitivo sería geolocalización con consentimiento (fuera del MVP) |
 | Límite de correos del plan gratuito de Supabase | Usuarios sin poder entrar | Contraseña como alternativa y, si se consigue, SMTP propio con Resend |
 | Cierre automático por horario en feriados | Sesiones cerradas antes de tiempo | La fecha se evalúa en `America/Santiago`; el usuario puede volver a marcar entrada; el histórico no se corrompe |

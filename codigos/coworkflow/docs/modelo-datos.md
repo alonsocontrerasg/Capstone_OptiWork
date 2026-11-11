@@ -141,7 +141,7 @@ Solo se lee mediante funciones `SECURITY DEFINER`.
 
 | `clave` | `valor` | Uso |
 |---------|---------|-----|
-| `qr_token_secret` | hex de 64 caracteres (32 bytes) | clave HMAC del token QR (`verificacion.sql` exige ≥ 64 caracteres) |
+| `qr_token_secret` | hex de 64 caracteres (256 bits de entropía) | clave HMAC del token QR; la clave usada es el **texto** del secreto (64 bytes UTF-8), no los 32 bytes que representa el hex (`verificacion.sql` exige ≥ 64 caracteres) |
 | `qr_window_seconds` | `45` | duración de la ventana rotativa, en segundos |
 
 `qr_window_seconds` **debe ser igual a `QR_WINDOW_SECONDS` del `.env` (45)**; ver «Formato del
@@ -192,12 +192,20 @@ Orden de verificación dentro de la RPC (todo en una transacción):
 1. `auth.uid()` presente → si no, `no_autenticado` (no escribe nada).
 2. **Consentimiento**: si `profiles.consentimiento_at` es `NULL` → `sin_consentimiento` (no escribe
    nada, ni siquiera en `eventos_scan`). Es un gate previo, no un resultado de intento.
-3. Límite de 10 intentos inválidos por minuto → `demasiados_intentos`.
+3. Límite de 10 intentos inválidos por minuto → `demasiados_intentos`. Cuenta las filas de
+   `eventos_scan` del usuario con `ts > now() - interval '1 minute'` y `resultado not in
+   ('entrada_ok', 'salida_ok')`; cuando ya hay 10, el intento siguiente se rechaza **sin insertar fila**
+   (si no, el contador nunca bajaría).
 4. Firma HMAC y formato del token → `token_invalido`.
 5. Ventana actual o anterior → `token_expirado`.
 6. Zona activa / horario → `zona_inactiva`, `fuera_horario`.
 7. Cooldown de 30 s → `cooldown`.
 8. Reglas de sesión → `sesion_ya_abierta`, `sin_sesion_abierta`, o `entrada_ok` / `salida_ok`.
+
+`rate_limited` **no** lo emite la RPC: es un resultado sintético del borde. `POST /api/scan` responde
+`rate_limited` (429) cuando Upstash niega el intento —60/min por IP o 10/min por usuario— sin llegar a
+llamar a `registrar_scan` (ver `docs/decisiones-seguridad.md`, S-30). La RPC solo puede devolver valores
+de `public.resultado_scan`, y `demasiados_intentos` sí viene de ella (paso 3).
 
 La versión 2 de la RPC (`20261110000000_consentimiento_y_scan.sql`) es una copia exacta de la
 migración 5 con **una sola** adición: el paso 2. Se mantuvo todo lo demás igual (incluido el orden y
@@ -214,7 +222,12 @@ v1.<zona_uuid>.<entrada|salida>.<ventana>.<hmac_hex>
 - `entrada|salida` = modo.
 - `ventana` = `floor(epoch / QR_WINDOW_SECONDS)` (por defecto 45 s).
 - `hmac_hex` = `HMAC-SHA256(payload, secreto)` en hex minúscula (64 caracteres), donde
-  `payload = "v1.<zona_uuid>.<modo>.<ventana>"`.
+  `payload = "v1.<zona_uuid>.<modo>.<ventana>"`. La **clave** es el **texto** del secreto
+  (`qr_token_secret` / `QR_TOKEN_SECRET`) tal cual: 64 caracteres ASCII = 64 bytes UTF-8, igual que
+  `extensions.hmac(text, text, 'sha256')` en Postgres. **No** son los 32 bytes que representa el hex;
+  por eso el servidor firma con `new TextEncoder().encode(secretoHex)`. Vector de prueba (para el test
+  de Vitest): `HMAC-SHA256("v1.00000000-0000-4000-8000-000000000000.entrada.123", clave = "ab" × 32)` =
+  `fd5034f93e12180c2b8169e2cac20f53a0de3848fb6b046186bfc1138fa5bdef`.
 
 El servidor acepta la **ventana actual y la anterior** (hasta ~90 s de margen).
 
@@ -254,8 +267,9 @@ values ('qr_token_secret', 'PEGA_AQUI_EL_HEX_DE_64_CARACTERES')
 on conflict (clave) do update set valor = excluded.valor, actualizado_at = now();
 ```
 
-(`openssl rand -hex 32` produce 64 caracteres hex = 32 bytes: `verificacion.sql` exige **al menos 64
-caracteres**, así que un valor hex de 64 es el mínimo aceptado.)
+(`openssl rand -hex 32` produce 64 caracteres hex = **256 bits** de entropía; como clave HMAC se usa el
+**texto** de 64 caracteres, o sea 64 bytes UTF-8. `verificacion.sql` exige **al menos 64 caracteres**,
+así que un valor hex de 64 es el mínimo aceptado.)
 
 ### 2b. Fijar la ventana del QR (45 s)
 La ventana vive en dos lugares que **deben coincidir**: `qr_window_seconds` en `app_secrets`
