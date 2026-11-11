@@ -9,8 +9,12 @@ import { crearClienteServidor } from "@/lib/supabase/server";
  * - `getClaims()` valida la firma del JWT (con las claves públicas del proyecto o pidiendo
  *   verificación a Auth si la firma es simétrica) y devuelve los claims ya comprobados.
  *
- * `getUser()`, la alternativa, hace siempre una llamada de red a Auth; `getClaims()` es
- * equivalente en garantía y más barato.
+ * Límite importante: `getClaims()` comprueba la firma y la expiración del JWT, pero **no**
+ * consulta el estado de la sesión en Auth. Un token revocado (por ejemplo, una sesión
+ * cerrada desde otro dispositivo) se sigue aceptando hasta que vence, así que sirve para
+ * identificar al usuario en las páginas normales, no para autorizar acciones sensibles. Las
+ * acciones de `/admin` usarán `getUser()`, que pregunta a Auth en cada llamada y detecta
+ * sesiones revocadas.
  */
 
 export type RolUsuario = "usuario" | "admin";

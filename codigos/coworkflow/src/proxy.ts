@@ -7,7 +7,7 @@ import { OPCIONES_COOKIE, conOpcionesSeguras } from "@/lib/supabase/cookies";
 /**
  * Proxy (antes `middleware.ts`, deprecado en Next 16).
  *
- * Hace dos cosas por request, en este orden:
+ * Hace tres cosas por request:
  *
  * 1. **Refresca la sesión de Supabase** y reescribe las cookies en la respuesta. Sin esto,
  *    el access token caduca y el usuario aparece deslogueado a mitad de navegación (S-09).
@@ -16,6 +16,12 @@ import { OPCIONES_COOKIE, conOpcionesSeguras } from "@/lib/supabase/cookies";
  * 2. **Aplica la CSP con nonce** (S-10). El nonce se genera por request, se pone en la
  *    cabecera de *petición* (`Content-Security-Policy`) para que Next lo estampe en sus
  *    `<script>` inline, y se repite en la respuesta.
+ * 3. **Fija las cabeceras de seguridad de transporte y permisos** (S-10): `nosniff`, HSTS,
+ *    `Referrer-Policy` y `Permissions-Policy`. La cámara se deniega para todo el sitio
+ *    (`camera=()`): el escaneo del QR usa la app de cámara nativa del celular, no
+ *    `getUserMedia`, así que ningún script de la página necesita ese permiso. En `/scan` el
+ *    `Referrer-Policy` es `strict-origin` (más estricto que el global) porque su URL lleva
+ *    el token del QR y no debe filtrarse al navegar hacia otro origen.
  *
  * No se hacen comprobaciones de autorización aquí: un guard en el proxy da una falsa
  * sensación de seguridad (se puede saltar en rutas no cubiertas) y la documentación de
@@ -66,14 +72,35 @@ function construirCsp(nonce: string): string {
   return directivas.join("; ");
 }
 
-function aplicarCabecerasDeSeguridad(respuesta: NextResponse, csp: string): void {
+/**
+ * ¿La ruta es la página de confirmación del escaneo? Su URL lleva el token del QR, así que
+ * necesita un `Referrer-Policy` más estricto que el global.
+ */
+function esRutaScan(ruta: string): boolean {
+  return ruta === "/scan";
+}
+
+function aplicarCabecerasDeSeguridad(
+  respuesta: NextResponse,
+  csp: string,
+  ruta: string,
+): void {
   respuesta.headers.set("Content-Security-Policy", csp);
   respuesta.headers.set("X-Content-Type-Options", "nosniff");
   respuesta.headers.set("X-Frame-Options", "DENY");
-  respuesta.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  // `strict-origin` en /scan: el navegador manda solo el origen, nunca la ruta con `?t=`.
+  // En el resto del sitio se mantiene el valor menos restrictivo, que conserva la ruta
+  // para las analíticas internas sin filtrarla entre orígenes (S-10).
+  respuesta.headers.set(
+    "Referrer-Policy",
+    esRutaScan(ruta) ? "strict-origin" : "strict-origin-when-cross-origin",
+  );
+  // `camera=()` la deniega para todo el sitio, incluso para el propio origen: el QR se
+  // escanea con la app de cámara nativa, así que `getUserMedia` no se usa y el permiso se
+  // cierra por completo (menos superficie si algún día entra un script de terceros).
   respuesta.headers.set(
     "Permissions-Policy",
-    "camera=(self), geolocation=(self), microphone=(), payment=()",
+    "camera=(), geolocation=(self), microphone=(), payment=()",
   );
   respuesta.headers.set("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
 
@@ -96,6 +123,7 @@ function serializarCookies(request: NextRequest): string {
 export async function proxy(request: NextRequest) {
   const nonce = crearNonce();
   const csp = construirCsp(nonce);
+  const ruta = request.nextUrl.pathname;
 
   const cabecerasPeticion = new Headers(request.headers);
   cabecerasPeticion.set("x-nonce", nonce);
@@ -132,7 +160,7 @@ export async function proxy(request: NextRequest) {
           for (const [nombre, valor] of Object.entries(cabecerasDeCache)) {
             respuesta.headers.set(nombre, valor);
           }
-          aplicarCabecerasDeSeguridad(respuesta, csp);
+          aplicarCabecerasDeSeguridad(respuesta, csp, ruta);
         },
       },
     },
@@ -145,7 +173,7 @@ export async function proxy(request: NextRequest) {
     // Token inválido o red caída: se sigue como anónimo; cada página decide qué hacer.
   }
 
-  aplicarCabecerasDeSeguridad(respuesta, csp);
+  aplicarCabecerasDeSeguridad(respuesta, csp, ruta);
   return respuesta;
 }
 

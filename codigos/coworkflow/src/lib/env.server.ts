@@ -23,7 +23,7 @@ const esquemaServidor = z.object({
 
   /**
    * Clave HMAC-SHA256 del QR rotativo, en hexadecimal.
-   * Debe ser **exactamente** 64 caracteres hex (32 bytes) y coincidir con la fila
+   * Debe ser **exactamente** 64 caracteres hex (256 bits) y coincidir con la fila
    * `qr_token_secret` de `public.app_secrets` (la RPC verifica la firma en Postgres).
    * Generar con: `openssl rand -hex 32`.
    */
