@@ -14,6 +14,16 @@ import { z } from "zod";
 
 const obligatorio = (mensaje: string) => z.string().trim().min(1, mensaje);
 
+/**
+ * Bandera OPCIONAL de demostración (`NEXT_PUBLIC_DATOS_DEMO`).
+ *
+ * No es obligatoria a propósito: la app tiene que arrancar igual sin ella. Se usa `.catch` en
+ * vez de `.default` para que un valor inesperado (`"True"`, `"1"`, vacío) no tumbe el arranque:
+ * simplemente se interpreta como `false`, que es el estado seguro (no rotular como demo lo que
+ * no lo es).
+ */
+const banderaOpcional = z.enum(["true", "false"]).catch("false");
+
 const esquemaPublico = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z
     .string()
@@ -38,6 +48,7 @@ const esquemaPublico = z.object({
     /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
     "NEXT_PUBLIC_ZONA_POR_DEFECTO debe ser un slug en kebab-case",
   ),
+  NEXT_PUBLIC_DATOS_DEMO: banderaOpcional,
 });
 
 const resultado = esquemaPublico.safeParse({
@@ -45,6 +56,7 @@ const resultado = esquemaPublico.safeParse({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
   NEXT_PUBLIC_ZONA_POR_DEFECTO: process.env.NEXT_PUBLIC_ZONA_POR_DEFECTO,
+  NEXT_PUBLIC_DATOS_DEMO: process.env.NEXT_PUBLIC_DATOS_DEMO,
 });
 
 if (!resultado.success) {
@@ -58,6 +70,14 @@ if (!resultado.success) {
 }
 
 export const envPublico = resultado.data;
+
+/**
+ * `true` solo cuando `NEXT_PUBLIC_DATOS_DEMO="true"`.
+ *
+ * Se exporta ya resuelto para que las páginas no repitan la comparación con el string. Cualquier
+ * otro valor (o la ausencia de la variable) deja la app como siempre, sin franja de demo.
+ */
+export const datosDemoActivos = envPublico.NEXT_PUBLIC_DATOS_DEMO === "true";
 
 /** Origen del proyecto Supabase, útil para armar la CSP (`connect-src`). */
 export function origenSupabase(url: string = envPublico.NEXT_PUBLIC_SUPABASE_URL): {

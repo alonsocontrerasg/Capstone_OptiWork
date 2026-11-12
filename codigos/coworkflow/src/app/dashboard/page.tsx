@@ -7,7 +7,7 @@ import { ContadorOcupacion } from "@/components/ContadorOcupacion";
 import { EstadisticasDashboard } from "@/components/EstadisticasDashboard";
 import { etiquetaHora } from "@/lib/dominio/estadisticas";
 import { horaDeTexto } from "@/lib/dominio/tiempo";
-import { envPublico } from "@/lib/env";
+import { envPublico, datosDemoActivos } from "@/lib/env";
 import { obtenerOcupacionActual } from "@/lib/supabase/dashboard";
 import { obtenerZonaPorSlug } from "@/lib/supabase/zonas";
 import {
@@ -122,6 +122,18 @@ export default async function PaginaDashboard({ searchParams }: Props) {
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+        {datosDemoActivos ? (
+          // Labelling obligatorio de la demo: quien mire el dashboard tiene que saber que parte
+          // de las cifras es simulada (scripts/simular-ocupacion.ts). Solo clases de Tailwind,
+          // sin atributos de estilo inline (la CSP los bloquea).
+          <p
+            role="note"
+            className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+          >
+            Datos de demostración: parte de las cifras proviene de una simulación.
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
             Ocupación ahora

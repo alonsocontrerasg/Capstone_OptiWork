@@ -48,6 +48,13 @@ const FORMATO_DECIMAL = new Intl.NumberFormat("es-CL", {
 
 const FORMATO_ENTERO = new Intl.NumberFormat("es-CL");
 
+/**
+ * Etiquetas del eje Y: máximo 1 decimal ("12,5", "100"), sin notación científica ni decimales
+ * de máquina. Recharts corta la etiqueta si no cabe en el ancho del eje, por eso además del
+ * formato hace falta reservar ancho suficiente (ver `width` del `YAxis`).
+ */
+const formatearEjeY = (valor: number): string => FORMATO_DECIMAL.format(valor);
+
 /** Azul 600: contraste ≥ 4,5:1 sobre fondo blanco y sobre zinc-950. */
 const COLOR_SERIE = "#2563eb";
 
@@ -321,7 +328,7 @@ function GraficoBarras({
           <BarChart
             data={puntos}
             accessibilityLayer={false}
-            margin={{ top: 8, right: 8, bottom: 0, left: -8 }}
+            margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
           >
             <CartesianGrid
               stroke="currentColor"
@@ -335,7 +342,16 @@ function GraficoBarras({
               axisLine={{ stroke: "currentColor", strokeOpacity: 0.3 }}
               interval="preserveStartEnd"
             />
-            <YAxis width={36} tick={ESTILO_TICK} tickLine={false} axisLine={false} />
+            <YAxis
+              // Ancho reservado para que "100" o "62,5" se vean completos; sin margen negativo
+              // a la izquierda, que era lo que recortaba la primera cifra.
+              width={44}
+              tick={ESTILO_TICK}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={formatearEjeY}
+              domain={[0, "auto"]}
+            />
             <Tooltip
               cursor={{ fill: "currentColor", fillOpacity: 0.08 }}
               content={(props) => (
@@ -371,6 +387,13 @@ function GraficoBarras({
  * continua ahí inventaría datos. `dot={false}` porque con ≤24 puntos el área ya se lee bien.
  */
 function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
+  /**
+   * Ticks uniformes en el eje X: una sí y otra no solo cuando el eje se llena. Con
+   * `interval="preserveStartEnd"` Recharts elegía qué horas omitir según el espacio disponible y
+   * se saltaba horas sueltas (p. ej. las 18:00) de forma despareja.
+   */
+  const intervaloEje = puntos.length <= 13 ? 0 : 1;
+
   return (
     <>
       <div
@@ -400,7 +423,8 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={{ stroke: "currentColor", strokeOpacity: 0.3 }}
-              interval="preserveStartEnd"
+              interval={intervaloEje}
+              minTickGap={0}
             />
             <YAxis
               width={36}
