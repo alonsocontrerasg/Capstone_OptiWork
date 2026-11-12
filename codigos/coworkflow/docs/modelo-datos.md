@@ -140,8 +140,9 @@ impide comparar dos rangos solapados y despejar la celda restante (ataque por di
 
 El dashboard público **no** lee `snapshots_ocupacion` crudo: PostgREST corta cada respuesta en
 1000 filas y 30 días de snapshots cada 5 min son ~8.640, así que la consulta se truncaría en
-silencio. La migración 9 agrega en Postgres y devuelve como máximo 168 filas (7 días × 24 horas)
-o 288 (un día):
+silencio. La migración 9 agrega en Postgres y devuelve como máximo 168 filas (7 días de la
+semana × 24 horas; 30 días solo acumula más muestras por celda) o 300 (un día de 25 h por DST;
+288 en uno de 24 h):
 
 - `ocupacion_por_franja(p_zona_id uuid, p_dias integer)` devuelve
   `(dow integer, hora integer, promedio double precision, muestras bigint)`.
@@ -161,8 +162,9 @@ o 288 (un día):
 
 - `ocupacion_hoy(p_zona_id uuid)` devuelve `(ts timestamptz, cantidad integer)`: los snapshots del
   día local actual, `[medianoche local, siguiente medianoche local)`, ordenados por `ts` y con
-  `limit 288` (24 h × 12 bins de 5 min). Alimenta la curva de «hoy», para que el dashboard no
-  quede vacío durante el primer día.
+  `limit 300` (25 h × 12 bins de 5 min). Alimenta la curva de «hoy», para que el dashboard no
+  quede vacío durante el primer día. El tope cubre el día de 25 h por DST (300 snapshots) y deja
+  margen sobre un día normal (288); `verificacion.sql` comprueba que no se superen las 300.
 
 Ambas son `SECURITY DEFINER` con `search_path = public, pg_temp`, `STABLE`, y solo leen
 `snapshots_ocupacion` (agregados; no hay `user_id` ni sesiones). `EXECUTE` se revoca a `public`
@@ -210,8 +212,13 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 | `permanencia_promedio(...)` | ✓ | ✓ | estadística pública (solo `cierre = 'usuario'`) |
 | `personas_distintas(...)` | ✓ | ✓ | estadística pública (`count(distinct user_id)`) |
 | `ocupacion_por_franja(uuid, integer)` | ✓ | ✓ | agregado público día ISO × hora (solo snapshots, 7 o 30 días) |
-| `ocupacion_hoy(uuid)` | ✓ | ✓ | snapshots del día local actual (máx. 288, solo agregados) |
+| `ocupacion_hoy(uuid)` | ✓ | ✓ | snapshots del día local actual (máx. 300, solo agregados) |
 | `handle_new_user`, `proteger_rol`, `validar_timezone_zona`, `refrescar_ocupacion`, `crear_ocupacion_inicial`, `actualizar_ocupacion`, `obtener_secreto_qr`, `zona_abierta`, `cron_*` | ✗ | ✗ | solo trigger/cron/RPC interno |
+
+`service_role` ya tiene `EXECUTE` en `refrescar_ocupacion(uuid)` por los privilegios por defecto
+de Supabase (verificado con `has_function_privilege` el 2026-11-11); la migración 9 no lo
+modifica. La simulación local lo usa para reconciliar `ocupacion_actual` después de insertar
+sesiones. No es invocable con `anon` ni `authenticated`.
 
 ## Jobs de pg_cron
 

@@ -12,7 +12,9 @@ import { esRangoDias, type RangoDias } from "@/lib/validacion/dashboard";
  * - `[]` = la consulta funcionó pero no hay filas (la UI muestra «sin datos»).
  *
  * Nunca se traen snapshots crudos de 30 días: PostgREST corta en 1000 filas y hay ~8.640.
- * `ocupacion_por_franja` agrega en Postgres y devuelve como máximo 168 filas.
+ * `ocupacion_por_franja` agrega en Postgres y devuelve como máximo 168 filas. Los snapshots de
+ * `ocupacion_hoy` (≤288) tampoco viajan al cliente: la página los reduce a una serie de 24
+ * puntos con `construirSerieHoy` antes de pasarlos a un Client Component.
  */
 
 export type OcupacionActual = {
@@ -139,6 +141,10 @@ export async function obtenerFranjas(
   return filas;
 }
 
+/**
+ * Snapshots del día local actual (máx. 288). Es una lectura de SERVIDOR: quien la use debe
+ * agregarla a 24 puntos (`construirSerieHoy`) antes de entregarla a un Client Component.
+ */
 export async function obtenerOcupacionHoy(
   zonaId: string,
 ): Promise<PuntoSnapshot[] | null> {
@@ -163,6 +169,10 @@ export async function obtenerOcupacionHoy(
   return filas;
 }
 
+/**
+ * Permanencia promedio (segundos) o `null` (sin datos publicables). `desde`/`hasta` deben venir
+ * de `limitesRangoDias` (mediodías locales); la RPC los alinea a medianoche de la zona.
+ */
 export async function obtenerPermanenciaPromedio(
   zonaId: string,
   desde: Date,
@@ -194,6 +204,10 @@ export async function obtenerPermanenciaPromedio(
     : null;
 }
 
+/**
+ * Personas distintas o `null` (k-anonimato o sin datos). Mismo contrato de fechas que
+ * `obtenerPermanenciaPromedio`.
+ */
 export async function obtenerPersonasDistintas(
   zonaId: string,
   desde: Date,

@@ -2,11 +2,12 @@
 -- CoworkFlow · Etapa 5 · Migración 9
 -- Propósito: agregados de ocupación para el dashboard público.
 --   · ocupacion_por_franja(zona, 7|30) → promedio por día de la semana × hora local,
---     sobre días civiles completos y solo horas de apertura.
---   · ocupacion_hoy(zona) → snapshots del día local actual (máx. 288 filas).
---   · Devuelven SOLO agregados de snapshots_ocupacion: sin user_id ni sesiones.
+--     sobre días civiles completos y solo horas dentro del horario de la zona.
+--   · ocupacion_hoy(zona) → snapshots del día local actual (máx. 300 filas: 25 h × 12 bins).
+--   · Devuelven SOLO datos de snapshots_ocupacion (conteos ya agregados a 5 min): ni
+--     user_id ni sesiones.
 --   · SECURITY DEFINER + search_path fijo; EXECUTE solo anon/authenticated.
--- Requiere: rol postgres. Idempotente.
+-- Requiere: rol postgres y roles anon/authenticated/service_role (Supabase). Idempotente.
 -- ============================================================
 
 -- Promedio de ocupación por (día de la semana ISO, hora local) en la zona.
@@ -78,7 +79,8 @@ $$;
 comment on function public.ocupacion_por_franja(uuid, integer) is
   'Agregado público de snapshots por día ISO (1=lunes) y hora local de la zona. p_dias solo 7 o 30. Sin PII.';
 
--- Snapshots del día local actual (máx. 288 = 24 h × 12 bins de 5 min).
+-- Snapshots del día local actual (máx. 300 = 25 h × 12 bins de 5 min). Un día normal tiene
+-- 288; el día de 25 h por DST necesita 300, así que el tope cubre ambos sin recortar.
 create or replace function public.ocupacion_hoy(p_zona_id uuid)
 returns table (
   ts timestamptz,
@@ -116,12 +118,12 @@ begin
     and s.ts >= v_desde
     and s.ts < v_hasta
   order by s.ts
-  limit 288;
+  limit 300;
 end;
 $$;
 
 comment on function public.ocupacion_hoy(uuid) is
-  'Snapshots del día local actual de la zona (máx. 288 filas). Agregado sin PII.';
+  'Serie de snapshots del día local actual de la zona (máx. 300 filas, día de 25 h por DST). Sin PII.';
 
 -- El dashboard público es anónimo: solo estas dos funciones quedan invocables por la API.
 revoke execute on function public.ocupacion_por_franja(uuid, integer)
@@ -133,3 +135,14 @@ revoke execute on function public.ocupacion_hoy(uuid)
   from public, anon, authenticated;
 grant execute on function public.ocupacion_hoy(uuid)
   to anon, authenticated;
+
+-- ------------------------------------------------------------
+-- Simulación local (Etapa 6) — reconciliación del contador
+-- ------------------------------------------------------------
+-- `refrescar_ocupacion(uuid)` se revocó de PUBLIC/anon/authenticated en la migración 3.
+-- service_role ya tiene EXECUTE por privilegios por defecto de Supabase; verificado con
+-- has_function_privilege el 2026-11-11. Esta migración no modifica ese privilegio.
+-- La simulación corre solo en local con service_role (S-07) y necesita reconciliar
+-- `ocupacion_actual` después de insertar sesiones históricas; el trigger de `sesiones` ya
+-- la recalcula, pero llamarla explícitamente deja el contador determinista al final.
+-- No se concede a anon/authenticated: la API pública no puede invocarla.

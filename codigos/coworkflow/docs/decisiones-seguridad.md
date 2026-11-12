@@ -52,6 +52,8 @@
 | S-34 | `camera=()` en `Permissions-Policy` | 4 |
 | S-35 | Rate limit en `/auth/login` por IP y hash de correo, sin enumerar | 4 |
 | S-36 | `getClaims()` no detecta revocación; `/admin` usará `getUser()` | 4 · 6 |
+| S-37 | Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI | 5 |
+| S-38 | Agregados en Postgres y solo agregados al navegador (tope de 1000 filas) | 5 |
 
 ---
 
@@ -661,7 +663,8 @@ tope de 90 días coincide con lo que realmente existe en la tabla, de modo que e
 de cuándo se purgó, y acota el costo de la consulta.
 
 **Dónde se implementa.** `..._stats.sql` (`permanencia_promedio`, `personas_distintas`),
-`..._pg_cron_jobs.sql` (`cron_resumen_diario`).
+`..._pg_cron_jobs.sql` (`cron_resumen_diario`) y, desde la Etapa 5, la migración 9
+(`ocupacion_por_franja` con lista cerrada `7|30`; ver S-37 y S-38).
 
 **Tradeoff.** Un rango que no empieza ni termina a medianoche se redondea hacia abajo (el usuario
 recibe algo distinto de lo que pidió, pero determinista); en particular, un rango intra-día devuelve
@@ -683,10 +686,15 @@ el dato protegido es la ocupación de un espacio físico, no información sensib
 (no hay datos de salud, biometría ni geolocalización). Se documenta porque el informe debe declararlo:
 k-anonimato ≠ privacidad diferencial.
 
-**Mitigación parcial prevista (Etapa 5).** Limitar en el dashboard las consultas a un conjunto cerrado
-de rangos (día, semana, mes alineados) en lugar de aceptar `p_desde`/`p_hasta` libres desde el cliente,
-y aplicar rate limit por IP en la ruta que las consume. Con eso el atacante tendría que llamar la RPC
-directamente y quedaría sujeto al mismo límite.
+**Estado real de la mitigación (Etapa 5).** La UI del dashboard solo ofrece dos ventanas cerradas
+(7 y 30 días) y `ocupacion_por_franja` valida esa lista dentro de la RPC; sin embargo,
+`permanencia_promedio` y `personas_distintas` siguen siendo invocables directamente con
+`p_desde`/`p_hasta` libres (1..90 días) porque la anon key es pública. Tampoco se añadió rate
+limit por IP a las lecturas: el dashboard es un RSC (no hay una ruta HTTP propia) y aplicar
+Upstash a lecturas consumiría la cuota gratuita de ~10k comandos/día; además su política de falla
+cerrada tumbaría el dashboard público ante un fallo de Redis. Queda como **limitación conocida**;
+la mitigación futura es exponer funciones de ventana fija (un entero cerrado en vez de fechas) y/o
+revocar `EXECUTE` a `anon` de las funciones de rango libre. Ver S-37.
 
 
 ### S-24 · Permanencia solo con `cierre = 'usuario'` y salida del cierre automático acotada a 8 h
@@ -1228,6 +1236,78 @@ escaneable desde cualquier lugar. Mitigación prevista en la Etapa 6: que `requi
 `getUser()` —una llamada a Auth por render de `/qr` y por petición a `/api/qr/token`— para que la
 revocación surta efecto de inmediato en la ruta que emite tokens.
 
+### S-37 · Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI
+
+**Decisión.** El dashboard público es un Server Component: resuelve la zona y los agregados en el
+servidor con el cliente `anon` (sujeto a RLS) y no expone una ruta HTTP propia para estadísticas.
+La UI solo ofrece `7` y `30` días (toggle en el cliente con ambas series precalculadas), pero el
+contrato de lectura no se considera cerrado: `ocupacion_por_franja` valida 7/30 dentro de la RPC,
+mientras `permanencia_promedio` y `personas_distintas` siguen aceptando `p_desde`/`p_hasta` libres
+(1..90 días) y son ejecutables por `anon`, que es una clave pública. No se usa Upstash en lecturas.
+
+**Amenaza.** (1) Coste/abuso: un tercero puede llamar las RPC directamente y consumir CPU o
+interrogar rangos solapados para intentar el ataque por diferencia de S-23. (2) Disponibilidad:
+poner rate limit en las lecturas con la política de falla cerrada de S-30 haría que un fallo o
+agotamiento de Upstash dejara sin dashboard a todo el público. (3) Cuota: el plan gratuito de
+Upstash (~10k comandos/día) ya se comparte con `/api/scan` y `/auth/login`; las lecturas del
+dashboard son las más frecuentes y las consumirían primero.
+
+**Por qué esta solución.** El dato es público por diseño (ocupación de un espacio físico), ya está
+agregado y no contiene PII; la prioridad es que el dashboard se vea siempre, incluso en la demo y
+con la cuota gratuita. El coste se acota en la base (funciones con índice y salida ≤168 puntos) y
+con el render del RSC, no con un limitador que puede fallar. La decisión de producto del toggle
+7/30 (que se había numerado como S-41) no es una decisión de seguridad: se documenta aquí como
+contexto y no se registra aparte.
+
+**Limitación conocida y mitigación futura.** Quien tenga la anon key puede llamar
+`permanencia_promedio`/`personas_distintas` con rangos libres; el k-anonimato (S-18/S-23) y el
+tope de 90 días siguen aplicando, pero no hay límite de consultas. Mitigación futura: funciones de
+ventana fija (recibir un `p_dias` cerrado, como `ocupacion_por_franja`, en vez de fechas) y
+revocar `EXECUTE` a `anon` de las variantes de rango libre, dejando solo wrappers cerrados. Si el
+tráfico lo justifica, un cubo de Upstash separado y **fail-open** para lecturas.
+
+**Dónde se implementa.** `src/lib/validacion/dashboard.ts` (lista `7|30`),
+`src/lib/supabase/dashboard.ts` (RSC con `anon`), migración 9 (`p_dias` validado) y
+`src/app/dashboard/page.tsx` (Tanda 3).
+
+**Tradeoff.** La UI ofrece solo dos ventanas (menos flexibilidad para el informe), la limitación
+queda declarada en vez de resuelta y no hay rate limit por IP en lecturas.
+
+### S-38 · Agregados en Postgres y solo agregados al navegador (tope de 1000 filas)
+
+**Decisión.** Las estadísticas se calculan con `ocupacion_por_franja(zona, 7|30)` y
+`ocupacion_hoy(zona)`: funciones `SECURITY DEFINER`, `search_path = public, pg_temp`, `STABLE`, que
+solo leen `snapshots_ocupacion` y devuelven agregados o la serie de conteos del día, sin
+identidades. `EXECUTE` se revoca de `PUBLIC` y se concede solo a `anon` y `authenticated`. La
+página no consulta `snapshots_ocupacion` directamente. Al navegador viajan como máximo 24 puntos
+(curva de hoy) y una matriz 7×24 (mapa de calor); las filas crudas nunca cruzan a un Client
+Component. Realtime sigue publicando solo `ocupacion_actual` (S-03).
+
+**Amenaza.** (1) Truncamiento silencioso: PostgREST limita cada respuesta a 1000 filas por defecto
+y `.limit(9000)` no lo salta; 30 días de snapshots son ~8.640 filas, así que el dashboard mostraría
+solo una parte y las estadísticas quedarían sesgadas sin ningún error. (2) Sobreexposición y
+coste: traer filas crudas multiplica la superficie y la banda aunque no tengan PII. (3) Grants
+implícitos: una función nueva nace con `EXECUTE` para `PUBLIC`, así que sin `REVOKE` explícito
+quedaría invocable por cualquiera.
+
+**Por qué esta solución.** Agregar en Postgres usa el índice `(zona_id, ts)` y hace que el límite
+de 1000 deje de importar: el resultado está acotado por construcción (7 días × 24 horas = 168
+celdas; un día normal = 288 snapshots y el de 25 h por DST = 300). El contrato de salida es
+numérico y estable, y el cliente no puede
+pedir filas individuales ni rangos arbitrarios en `ocupacion_por_franja`. `REVOKE` + `GRANT` deja el
+privilegio mínimo verificado en `verificacion.sql`.
+
+**Dónde se implementa.** Migración 9, `src/lib/supabase/dashboard.ts`,
+`src/lib/dominio/estadisticas.ts` y `supabase/verificacion.sql` (existencia, EXECUTE, `p_dias=5`
+vacío, `p_dias=30` ≤168 y `ocupacion_hoy` ≤300).
+
+**Tradeoff.** El mapa de calor siempre pide 30 días (una consulta más, aunque acotada). El tope de
+300 de `ocupacion_hoy` cubre el día de 25 h por DST sin recortar la serie. `service_role` ya tiene
+`EXECUTE` en `refrescar_ocupacion(uuid)` por los privilegios por defecto de Supabase (verificado
+con `has_function_privilege` el 2026-11-11); la migración 9 no lo modifica. La simulación local la
+usa para reconciliar `ocupacion_actual`; no es una exposición nueva, porque `service_role` nunca
+llega al navegador (S-07) y sigue sin estar disponible para `anon`/`authenticated`.
+
 ---
 
 ## Pendientes de documentar en las próximas etapas
@@ -1242,6 +1322,7 @@ revocación surta efecto de inmediato en la ruta que emite tokens.
 | `requireAdmin()` con `getUser()` para `/qr` y `/api/qr/token` (S-36, limitación conocida) | 6 |
 | Vector HMAC `fd5034f9…bdef` como test de Vitest (S-16 · S-26) | 6 |
 | Test de contrato entre `RESULTADOS_SCAN` y el enum `resultado_scan` (S-33) | 6 |
+| Ventana fija o revocación de `EXECUTE` a `anon` para `permanencia_promedio`/`personas_distintas` (S-37, limitación conocida) | 6 |
 
 ## Control de cambios
 
@@ -1260,3 +1341,5 @@ revocación surta efecto de inmediato en la ruta que emite tokens.
 | 2026-11-11 | Se actualizan `docs/arquitectura.md` (§5.1 con `demasiados_intentos`, §9 con los usos reales de Upstash y de la clave HMAC, §11.3 y §14) y `docs/modelo-datos.md` (clave HMAC como texto, vector de prueba y nota de que `rate_limited` no lo emite la RPC) |
 | 2026-11-11 | Corrección de redacción en la Etapa 4: S-36 aclara que PostgREST solo valida firma y expiración (un token revocado pero vigente **sí** llama a `registrar_scan`) y añade la limitación conocida de `requireAdmin()` con `getClaims()` en `/qr` y `/api/qr/token`; S-31 corrige `next start` (sin `x-vercel-forwarded-for` el resultado es siempre 429, nunca 500); S-33 precisa por qué no hay tipos generados |
 | 2026-11-11 | Verificación contra `supabase/migrations/20261110000000_consentimiento_y_scan.sql`: el umbral es `c_max_invalidos_min := 10` sobre `eventos_scan` con `ts > now() - interval '1 minute'` y `resultado not in ('entrada_ok','salida_ok')`, y corta con `v_invalidos >= 10` (bloque `-- 1)` de la migración, paso 3 de la lista de `modelo-datos.md`). Se precisa la semántica del umbral en ambos documentos y `arquitectura.md` §5.2 remite a S-36 por la limitación de `requireAdmin()` con `getClaims()` |
+| 2026-11-11 | Etapa 5 (Tanda 1): agregados del dashboard en Postgres y solo agregados al navegador, por el tope de 1000 filas de PostgREST (S-38); estadísticas por RSC sin Upstash, con rangos cerrados solo en la UI y la limitación de las RPC de rango libre declarada (S-37). Se corrige S-23 para no atribuirse una mitigación que no se implementó y la decisión de UI del toggle 7/30 se funde en S-37 |
+| 2026-11-11 | Verificación DST de `tiempo.ts` contra un Postgres 18 temporal (`America/Santiago`): los mediodías locales de `2026-09-06` y `2026-04-05` y sus ventanas de 7 días coinciden al milisegundo con `date_trunc('day', … at time zone …) at time zone …` y con el redondeo a medianoche de la migración 9. También se probó la migración 9 en ese Postgres: `p_dias=5` → 0 filas, `p_dias=30` ≤168, `ocupacion_hoy` solo el día local, `anon`/`authenticated` con EXECUTE, `PUBLIC` sin él; `service_role` con EXECUTE en `refrescar_ocupacion`, confirmado también en Supabase el 2026-11-11 |

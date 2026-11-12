@@ -35,3 +35,80 @@ export function obtenerClienteNavegador(): SupabaseClient {
 
   return cliente;
 }
+
+export type CambioOcupacion = {
+  cantidad: number;
+  updatedAt: string | null;
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizarCambio(valor: unknown): CambioOcupacion | null {
+  if (typeof valor !== "object" || valor === null) return null;
+
+  const fila = valor as Record<string, unknown>;
+  const cantidad =
+    typeof fila.cantidad === "string" ? Number(fila.cantidad) : fila.cantidad;
+
+  if (
+    typeof cantidad !== "number" ||
+    !Number.isFinite(cantidad) ||
+    !Number.isInteger(cantidad) ||
+    cantidad < 0
+  ) {
+    return null;
+  }
+
+  return {
+    cantidad,
+    updatedAt:
+      typeof fila.updated_at === "string" ? fila.updated_at : null,
+  };
+}
+
+/**
+ * Abre UN canal de Realtime sobre `ocupacion_actual` para una zona y avisa en cada INSERT o
+ * UPDATE (el primero ocurre al crear la zona; después el trigger solo hace UPDATE). El
+ * `filter` por `zona_id` evita recibir cambios de otras zonas.
+ *
+ * Devuelve la función de limpieza: el componente debe llamarla al desmontar
+ * (`removeChannel`), o cada navegación dejaría un WebSocket abierto.
+ *
+ * El `zona_id` se valida como UUID antes de interpolarlo en el filtro: así un valor de la
+ * URL no puede inyectar condiciones en la suscripción. Un id inválido no abre canal y la UI
+ * conserva el dato inicial del RSC.
+ */
+export function suscribirseOcupacionActual(
+  zonaId: string,
+  alCambiar: (cambio: CambioOcupacion) => void,
+): () => void {
+  if (!UUID.test(zonaId)) {
+    console.warn("[realtime] zona_id inválido; no se suscribe a ocupacion_actual");
+    return () => {};
+  }
+
+  const supabase = obtenerClienteNavegador();
+  let canal = supabase.channel(`ocupacion_actual:${zonaId}`);
+
+  for (const evento of ["INSERT", "UPDATE"] as const) {
+    canal = canal.on(
+      "postgres_changes",
+      {
+        event: evento,
+        schema: "public",
+        table: "ocupacion_actual",
+        filter: `zona_id=eq.${zonaId}`,
+      },
+      (payload) => {
+        const cambio = normalizarCambio(payload.new);
+        if (cambio) alCambiar(cambio);
+      },
+    );
+  }
+
+  canal.subscribe();
+
+  return () => {
+    void supabase.removeChannel(canal);
+  };
+}

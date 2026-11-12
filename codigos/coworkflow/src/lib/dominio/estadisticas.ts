@@ -195,15 +195,21 @@ export function horaPunta(
   return mejor;
 }
 
-/** Permanencia legible; `null` (k-anonimato o sin datos) → «Sin datos». */
+/**
+ * Permanencia legible; `null` (k-anonimato o sin datos) → «Sin datos».
+ *
+ * El corte de «< 1 min» se hace sobre SEGUNDOS, no sobre minutos redondeados: 30 s son
+ * 0,5 min y `Math.round` los convertiría en «1 min», que es un dato falso. Cualquier valor
+ * menor que 60 s se muestra como «< 1 min».
+ */
 export function formatearPermanencia(segundos: number | null): string {
   if (segundos === null || !Number.isFinite(segundos) || segundos < 0) {
     return "Sin datos";
   }
 
-  const minutos = Math.round(segundos / 60);
-  if (minutos < 1) return "< 1 min";
+  if (segundos < 60) return "< 1 min";
 
+  const minutos = Math.round(segundos / 60);
   const horas = Math.floor(minutos / 60);
   const resto = minutos % 60;
 
@@ -223,9 +229,9 @@ export function formatearPersonas(valor: number | null): string {
   return FORMATO_PERSONAS.format(Math.round(valor));
 }
 
-/** Etiqueta de hora para ejes y tooltips: `8` → `"08:00"`. */
+/** Etiqueta de hora para ejes y tooltips: `8` → `"08:00"`; `24` → `"24:00"` (cierre). */
 export function etiquetaHora(hora: number): string {
-  if (!Number.isInteger(hora) || hora < 0 || hora > 23) return "—";
+  if (!Number.isInteger(hora) || hora < 0 || hora > 24) return "—";
   return `${String(hora).padStart(2, "0")}:00`;
 }
 

@@ -1,6 +1,6 @@
 -- ============================================================
--- CoworkFlow · verificacion.sql — Etapa 2
--- Ejecutar en el SQL Editor DESPUÉS de aplicar las 8 migraciones y el seed.
+-- CoworkFlow · verificacion.sql — Etapa 2 (ampliado en Etapa 5)
+-- Ejecutar en el SQL Editor DESPUÉS de aplicar las 9 migraciones y el seed.
 -- Corre como postgres. Si todo está bien termina con:
 --   NOTICE: Verificación OK ...
 -- Si algo falla, lanza una excepción listando los problemas encontrados.
@@ -333,7 +333,8 @@ begin
     v_errores := v_errores || format('%s zonas activas sin fila en ocupacion_actual', v_total);
   end if;
 
-  -- 14) Agregados del dashboard: solo 7/30 días y la curva de hoy no supera 288 filas.
+  -- 14) Agregados del dashboard: solo 7/30 días y la curva de hoy no supera 300 filas
+  -- (25 h × 12 bins en el día de 25 h por DST; 288 en un día normal).
   select z.id into v_zona from public.zonas z order by z.slug limit 1;
   if v_zona is null then
     raise notice 'AVISO: no hay zonas; se omite la prueba de ocupacion_por_franja/ocupacion_hoy.';
@@ -343,9 +344,27 @@ begin
       v_errores := v_errores || format('ocupacion_por_franja con p_dias=5 devolvió %s filas (debe ser 0)', v_total);
     end if;
 
+    -- 30 días NO multiplica las filas: el resultado sigue acotado a 7 días × 24 horas.
+    select count(*) into v_total from public.ocupacion_por_franja(v_zona, 30);
+    if v_total > 168 then
+      v_errores := v_errores || format('ocupacion_por_franja con p_dias=30 devolvió %s filas (máximo 168)', v_total);
+    end if;
+
     select count(*) into v_total from public.ocupacion_hoy(v_zona);
-    if v_total > 288 then
-      v_errores := v_errores || format('ocupacion_hoy devolvió %s filas (máximo 288)', v_total);
+    if v_total > 300 then
+      v_errores := v_errores || format('ocupacion_hoy devolvió %s filas (máximo 300)', v_total);
+    end if;
+  end if;
+
+  -- 15) La simulación local (service_role) puede reconciliar el contador. service_role ya
+  -- tiene EXECUTE sobre refrescar_ocupacion(uuid) por los privilegios por defecto de
+  -- Supabase (verificado el 2026-11-11); la migración 9 no lo modifica. anon/authenticated
+  -- siguen sin poder.
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    if to_regprocedure('public.refrescar_ocupacion(uuid)') is null then
+      v_errores := v_errores || 'Falta public.refrescar_ocupacion(uuid)'::text;
+    elsif not has_function_privilege('service_role', 'public.refrescar_ocupacion(uuid)', 'EXECUTE') then
+      v_errores := v_errores || 'service_role no tiene EXECUTE sobre refrescar_ocupacion(uuid)'::text;
     end if;
   end if;
 
