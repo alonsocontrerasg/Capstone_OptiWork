@@ -3,13 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { ContadorOcupacion } from "@/components/ContadorOcupacion";
 import { EstadisticasDashboard } from "@/components/EstadisticasDashboard";
-import { SemaforoOcupacion } from "@/components/SemaforoOcupacion";
-import {
-  formatearPorcentaje,
-  resumirOcupacion,
-  type EstadoOcupacion,
-} from "@/lib/dominio/ocupacion";
 import { etiquetaHora } from "@/lib/dominio/estadisticas";
 import { horaDeTexto } from "@/lib/dominio/tiempo";
 import { envPublico } from "@/lib/env";
@@ -29,80 +24,6 @@ type Props = {
 // Metadata estática a propósito: `generateMetadata` dinámico se resuelve en paralelo al
 // render (metadata en streaming) y no sirve para adelantar el 404 de una zona inexistente.
 export const metadata: Metadata = { title: "Dashboard · CoworkFlow" };
-
-const SEGMENTOS_AFORO = 20;
-
-const COLOR_SEGMENTO: Record<EstadoOcupacion, string> = {
-  bajo: "bg-emerald-500",
-  moderado: "bg-amber-500",
-  lleno: "bg-red-500",
-  desconocido: "bg-zinc-400",
-};
-
-function formatearActualizacion(
-  iso: string | null,
-  timezone: string,
-): string | null {
-  if (!iso) return null;
-
-  const fecha = new Date(iso);
-  if (Number.isNaN(fecha.getTime())) return null;
-
-  try {
-    return new Intl.DateTimeFormat("es-CL", {
-      dateStyle: "short",
-      timeStyle: "short",
-      timeZone: timezone,
-    }).format(fecha);
-  } catch {
-    return null;
-  }
-}
-
-function BarraAforo({
-  porcentaje,
-  estado,
-}: {
-  porcentaje: number | null;
-  estado: EstadoOcupacion;
-}) {
-  const valor =
-    porcentaje === null
-      ? 0
-      : Math.min(100, Math.max(0, Math.round(porcentaje)));
-  const llenos =
-    porcentaje === null
-      ? 0
-      : Math.ceil((valor / 100) * SEGMENTOS_AFORO);
-
-  return (
-    <div
-      role="progressbar"
-      aria-label="Aforo utilizado"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      // Sin lectura (`porcentaje === null`) la barra es indeterminada: se omite
-      // `aria-valuenow` en vez de anunciar un 0% que no hemos medido.
-      aria-valuenow={porcentaje === null ? undefined : valor}
-      aria-valuetext={
-        porcentaje === null ? "Sin datos" : `${valor}% del aforo`
-      }
-      className="mt-2 flex gap-1"
-    >
-      {Array.from({ length: SEGMENTOS_AFORO }, (_, indice) => (
-        <span
-          key={indice}
-          aria-hidden="true"
-          className={`h-2.5 flex-1 rounded-full ${
-            indice < llenos
-              ? COLOR_SEGMENTO[estado]
-              : "bg-zinc-200 dark:bg-zinc-800"
-          }`}
-        />
-      ))}
-    </div>
-  );
-}
 
 function EstadisticasCargando() {
   return (
@@ -131,8 +52,9 @@ function EstadisticasCargando() {
  * `user_id` y las filas de `sesiones` nunca cruzan al navegador. El rango es una lista
  * cerrada (7|30) y un valor inválido cae al default sin romper la página.
  *
- * El contador inicial se pinta en el servidor. La isla de Realtime y los gráficos llegan
- * en tandas posteriores; aquí no hay estado de cliente ni suscripciones.
+ * El contador inicial se pinta en el servidor y lo refresca en el navegador la isla
+ * `ContadorOcupacion` (Realtime sobre `ocupacion_actual`). Los gráficos llegan en la
+ * Tanda 4; las tarjetas de texto se calculan aquí, en el servidor.
  *
  * `notFound()` se llama ANTES de devolver JSX y antes de cualquier `<Suspense>`: así la
  * respuesta conserva un 404 real (sin `loading.tsx` en este segmento, que abriría el
@@ -147,19 +69,6 @@ export default async function PaginaDashboard({ searchParams }: Props) {
   if (!zona || !zona.activa) notFound();
 
   const actual = await obtenerOcupacionActual(zona.id);
-  const configuracion = {
-    aforo_max: zona.aforo_max,
-    umbral_bajo: zona.umbral_bajo,
-    umbral_alto: zona.umbral_alto,
-  };
-  const resumen = actual
-    ? resumirOcupacion(actual.cantidad, configuracion)
-    : null;
-  const estado = resumen?.estado ?? "desconocido";
-  const actualizado = formatearActualizacion(
-    actual?.updatedAt ?? null,
-    zona.timezone,
-  );
 
   const apertura = horaDeTexto(zona.hora_apertura);
   const cierre = horaDeTexto(zona.hora_cierre);
@@ -222,63 +131,16 @@ export default async function PaginaDashboard({ searchParams }: Props) {
           </p>
         </div>
 
-        <section
-          aria-labelledby="ocupacion-titulo"
-          className="mt-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2
-                id="ocupacion-titulo"
-                className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-              >
-                Personas dentro
-              </h2>
-              <div className="mt-2 flex flex-wrap items-baseline gap-2">
-                <p className="text-7xl font-semibold leading-none tracking-tight tabular-nums">
-                  {actual ? (resumen?.cantidad ?? 0) : "—"}
-                </p>
-                <p className="text-lg text-zinc-500 dark:text-zinc-400">
-                  de {zona.aforo_max}
-                </p>
-              </div>
-            </div>
-            <SemaforoOcupacion estado={estado} />
-          </div>
-
-          <div className="mt-7">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-medium">Aforo utilizado</span>
-              <span className="font-semibold tabular-nums">
-                {actual
-                  ? formatearPorcentaje(resumen?.porcentaje ?? null)
-                  : "—"}
-              </span>
-            </div>
-            <BarraAforo
-              porcentaje={actual ? (resumen?.porcentaje ?? null) : null}
-              estado={estado}
-            />
-            <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-              Semáforo: bajo &lt; {zona.umbral_bajo}% · moderado{" "}
-              {zona.umbral_bajo}–{zona.umbral_alto}% · lleno &gt;{" "}
-              {zona.umbral_alto}% del aforo.
-            </p>
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-4 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-            <span>
-              {actual
-                ? "Última lectura del servidor"
-                : "No pudimos leer la ocupación en este momento."}
-            </span>
-            {actualizado && actual?.updatedAt ? (
-              <time dateTime={actual.updatedAt}>
-                Actualizado: {actualizado}
-              </time>
-            ) : null}
-          </div>
-        </section>
+        <ContadorOcupacion
+          key={`${zona.id}-${actual?.updatedAt ?? "x"}`}
+          zonaId={zona.id}
+          cantidadInicial={actual ? actual.cantidad : null}
+          actualizadoInicial={actual?.updatedAt ?? null}
+          aforoMax={zona.aforo_max}
+          umbralBajo={zona.umbral_bajo}
+          umbralAlto={zona.umbral_alto}
+          timezone={zona.timezone}
+        />
 
         <Suspense fallback={<EstadisticasCargando />}>
           <EstadisticasDashboard
@@ -289,9 +151,12 @@ export default async function PaginaDashboard({ searchParams }: Props) {
         </Suspense>
 
         <p className="mt-8 max-w-3xl text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          CoworkFlow publica solo datos agregados. Los registros individuales se
-          eliminan a los 90 días y las estadísticas requieren al menos 5
-          personas distintas para mostrarse.
+          CoworkFlow publica solo datos agregados. Los registros individuales de
+          entrada y salida se eliminan a los 90 días y solo se conservan los
+          agregados. La permanencia promedio y la cantidad de personas distintas
+          se muestran únicamente si el período incluye al menos 5 personas
+          distintas; la hora punta y los gráficos son promedios de ocupación y no
+          dependen de esa regla.
         </p>
       </main>
     </div>

@@ -17,6 +17,9 @@ import { envPublico } from "@/lib/env";
 
 let cliente: SupabaseClient | null = null;
 
+/** Contador para que cada suscripción use un topic de canal distinto (ver más abajo). */
+let suscripciones = 0;
+
 export function obtenerClienteNavegador(): SupabaseClient {
   if (cliente) return cliente;
 
@@ -40,6 +43,24 @@ export type CambioOcupacion = {
   cantidad: number;
   updatedAt: string | null;
 };
+
+/** Estados que puede reportar el canal de Realtime (enum `REALTIME_SUBSCRIBE_STATES`). */
+export type EstadoSuscripcion =
+  | "SUBSCRIBED"
+  | "CHANNEL_ERROR"
+  | "TIMED_OUT"
+  | "CLOSED";
+
+const ESTADOS_SUSCRIPCION: readonly EstadoSuscripcion[] = [
+  "SUBSCRIBED",
+  "CHANNEL_ERROR",
+  "TIMED_OUT",
+  "CLOSED",
+];
+
+function esEstadoSuscripcion(valor: string): valor is EstadoSuscripcion {
+  return (ESTADOS_SUSCRIPCION as readonly string[]).includes(valor);
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -71,6 +92,10 @@ function normalizarCambio(valor: unknown): CambioOcupacion | null {
  * UPDATE (el primero ocurre al crear la zona; después el trigger solo hace UPDATE). El
  * `filter` por `zona_id` evita recibir cambios de otras zonas.
  *
+ * `alCambiarEstado` es opcional y solo informa el ciclo de vida del canal (para pintar
+ * «En vivo» / «Reconectando…»). No cambia el comportamiento anterior: sin ese callback el
+ * canal se abre igual.
+ *
  * Devuelve la función de limpieza: el componente debe llamarla al desmontar
  * (`removeChannel`), o cada navegación dejaría un WebSocket abierto.
  *
@@ -81,6 +106,7 @@ function normalizarCambio(valor: unknown): CambioOcupacion | null {
 export function suscribirseOcupacionActual(
   zonaId: string,
   alCambiar: (cambio: CambioOcupacion) => void,
+  alCambiarEstado?: (estado: EstadoSuscripcion) => void,
 ): () => void {
   if (!UUID.test(zonaId)) {
     console.warn("[realtime] zona_id inválido; no se suscribe a ocupacion_actual");
@@ -88,7 +114,14 @@ export function suscribirseOcupacionActual(
   }
 
   const supabase = obtenerClienteNavegador();
-  let canal = supabase.channel(`ocupacion_actual:${zonaId}`);
+
+  // Nombre de canal único por suscripción. `supabase.channel()` devuelve el canal EXISTENTE
+  // si el topic ya está en uso: con el doble montaje de React Strict Mode eso reengancharía
+  // el canal anterior (que todavía se está cerrando) y el componente nuevo nunca recibiría
+  // eventos. El sufijo solo evita esa colisión interna; lo que limita los datos sigue siendo
+  // el `filter` por `zona_id`. Todas las suscripciones comparten un único WebSocket.
+  suscripciones += 1;
+  let canal = supabase.channel(`ocupacion_actual:${zonaId}:${suscripciones}`);
 
   for (const evento of ["INSERT", "UPDATE"] as const) {
     canal = canal.on(
@@ -106,7 +139,10 @@ export function suscribirseOcupacionActual(
     );
   }
 
-  canal.subscribe();
+  canal.subscribe((estado) => {
+    if (!alCambiarEstado || !esEstadoSuscripcion(estado)) return;
+    alCambiarEstado(estado);
+  });
 
   return () => {
     void supabase.removeChannel(canal);

@@ -201,6 +201,44 @@ export function horaLocalEnZona(
   return partes ? partes.hora : null;
 }
 
+const FORMATOS_FECHA_HORA = new Map<string, Intl.DateTimeFormat | null>();
+
+/**
+ * Fecha y hora legibles de un instante ISO en la zona (`es-CL`, formato corto).
+ *
+ * Se usa en la isla de Realtime para mostrar el `updated_at` de `ocupacion_actual` cuando
+ * llega un cambio en vivo. Devuelve `null` si el instante o la zona no son válidos: la UI
+ * simplemente omite la marca de tiempo en vez de inventar una fecha.
+ */
+export function formatearFechaHoraLocal(
+  instante: string | null,
+  timezone: string,
+): string | null {
+  if (typeof instante !== "string" || instante.length === 0) return null;
+
+  const fecha = new Date(instante);
+  if (Number.isNaN(fecha.getTime())) return null;
+
+  let formato = FORMATOS_FECHA_HORA.get(timezone);
+  if (formato === undefined) {
+    try {
+      formato = new Intl.DateTimeFormat("es-CL", {
+        dateStyle: "short",
+        timeStyle: "short",
+        timeZone: timezone,
+      });
+    } catch {
+      // Zona inexistente o motor sin datos de tz: se falla cerrado.
+      formato = null;
+    }
+    FORMATOS_FECHA_HORA.set(timezone, formato);
+  }
+
+  if (!formato) return null;
+
+  return formato.format(fecha);
+}
+
 /**
  * Interpreta un `time` de Postgres ("08:00", "08:00:00" o el cierre "24:00") y devuelve la
  * hora (0..23, o 24 solo para `24:00`).

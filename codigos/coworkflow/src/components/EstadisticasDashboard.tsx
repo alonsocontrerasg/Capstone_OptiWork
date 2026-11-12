@@ -32,6 +32,8 @@ import type { RangoDias } from "@/lib/validacion/dashboard";
  * Las tres lecturas se lanzan en paralelo. Cada tarjeta conserva su propio estado: una RPC
  * caída muestra «No se pudo cargar» solo en esa tarjeta, mientras las demás siguen visibles.
  * `valor === null` (k-anonimato de la RPC) no es un error: se muestra «Sin datos suficientes».
+ * Ese k-anonimato aplica a permanencia y personas distintas, que describen a individuos; la
+ * hora punta es un promedio de ocupación y no depende de esa regla.
  *
  * Solo viajan agregados: esta función no se importa desde ningún Client Component. Los
  * gráficos y el mapa de calor llegan en la Tanda 4.
@@ -133,8 +135,18 @@ function textoHoraPunta(
 
   const punta = horaPunta(construirSeriePorHora(resultado.valor));
   if (!punta) {
+    // Sin franjas publicables: no es un problema de k-anonimato (la tarjeta solo muestra un
+    // promedio de ocupación), simplemente no hay snapshots en el rango.
     return {
-      valor: { texto: "Sin datos suficientes", tono: "vacio" },
+      valor: { texto: "Sin datos", tono: "vacio" },
+    };
+  }
+
+  if (punta.promedio <= 0) {
+    // Hay franjas pero ninguna registró gente dentro: se evita destacar «00:00 · 0 personas»
+    // como si fuera la hora de mayor uso.
+    return {
+      valor: { texto: "Sin actividad registrada", tono: "vacio" },
     };
   }
 

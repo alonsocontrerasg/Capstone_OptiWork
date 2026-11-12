@@ -8,14 +8,16 @@ import { esRangoDias, type RangoDias } from "@/lib/validacion/dashboard";
  * Lecturas del dashboard público con el cliente de servidor (rol `anon`, RLS activa).
  *
  * Convención de errores:
- * - `obtenerOcupacionActual` devuelve `null` si la lectura falla.
+ * - `obtenerOcupacionActual` devuelve `null` si la lectura falla o si la zona todavía no
+ *   tiene fila en `ocupacion_actual` (la página lo pinta como «—», no como 0: «sin lectura»
+ *   y «cero personas» no son lo mismo).
  * - Las funciones que alimentan tarjetas devuelven `ResultadoRpc`: `{ ok: false }` si la RPC
  *   falló y `{ ok: true, valor }` si respondió (con `valor: null` cuando no hay datos
  *   publicables). Así una tarjeta puede mostrar su propio error sin tumbar la página.
  *
  * Nunca se traen snapshots crudos de 30 días: PostgREST corta en 1000 filas y hay ~8.640.
  * `ocupacion_por_franja` agrega en Postgres y devuelve como máximo 168 filas. Los snapshots de
- * `ocupacion_hoy` (≤288) tampoco viajan al cliente: la página los reduce a una serie de 24
+ * `ocupacion_hoy` (≤300) tampoco viajan al cliente: la página los reduce a una serie de 24
  * puntos con `construirSerieHoy` antes de pasarlos a un Client Component.
  */
 
@@ -95,8 +97,9 @@ export async function obtenerOcupacionActual(
   }
 
   if (!data) {
-    // La zona existe pero no tiene fila (no debería: el trigger la crea); se muestra 0.
-    return { cantidad: 0, updatedAt: null };
+    // La zona existe pero no tiene fila (no debería: el trigger la crea). Se devuelve `null`
+    // para que la UI muestre «—»: no hay lectura, y 0 sería un dato inventado.
+    return null;
   }
 
   const fila = data as { cantidad?: unknown; updated_at?: unknown };
@@ -148,7 +151,7 @@ export async function obtenerFranjas(
 }
 
 /**
- * Snapshots del día local actual (máx. 288). Es una lectura de SERVIDOR: quien la use debe
+ * Snapshots del día local actual (máx. 300). Es una lectura de SERVIDOR: quien la use debe
  * agregarla a 24 puntos (`construirSerieHoy`) antes de entregarla a un Client Component.
  */
 export async function obtenerOcupacionHoy(
