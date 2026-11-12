@@ -62,9 +62,9 @@ export function SemaforoOcupacion({ estado }: Props) {
   return (
     <span
       className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${clases}`}
-      aria-label={`Estado de ocupación: ${etiqueta}. ${descripcion}.`}
     >
       <Icono aria-hidden className="size-4 shrink-0" />
+      <span className="sr-only">Estado de ocupación: </span>
       <span>{etiqueta}</span>
       <span className="sr-only">. {descripcion}</span>
     </span>

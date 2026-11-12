@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense, cache } from "react";
+import { Suspense } from "react";
 
 import { EstadisticasDashboard } from "@/components/EstadisticasDashboard";
 import { SemaforoOcupacion } from "@/components/SemaforoOcupacion";
@@ -26,22 +26,9 @@ type Props = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-// `cache` memoiza la resolución por request: generateMetadata y la página comparten la
-// misma consulta a `zonas`. Además, resolver la zona antes del render permite devolver un
-// 404 real aunque `loading.tsx` haya abierto el streaming.
-const resolverZona = cache(async (slug: string) => obtenerZonaPorSlug(slug));
-
-export async function generateMetadata({
-  searchParams,
-}: Props): Promise<Metadata> {
-  const params = await searchParams;
-  const { zona: slugSolicitado } = interpretarQueryDashboard(params);
-  const slug = slugSolicitado ?? envPublico.NEXT_PUBLIC_ZONA_POR_DEFECTO;
-  const zona = await resolverZona(slug);
-  if (!zona || !zona.activa) notFound();
-
-  return { title: `Dashboard · ${zona.nombre}` };
-}
+// Metadata estática a propósito: `generateMetadata` dinámico se resuelve en paralelo al
+// render (metadata en streaming) y no sirve para adelantar el 404 de una zona inexistente.
+export const metadata: Metadata = { title: "Dashboard · CoworkFlow" };
 
 const SEGMENTOS_AFORO = 20;
 
@@ -91,9 +78,12 @@ function BarraAforo({
   return (
     <div
       role="progressbar"
+      aria-label="Aforo utilizado"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={valor}
+      // Sin lectura (`porcentaje === null`) la barra es indeterminada: se omite
+      // `aria-valuenow` en vez de anunciar un 0% que no hemos medido.
+      aria-valuenow={porcentaje === null ? undefined : valor}
       aria-valuetext={
         porcentaje === null ? "Sin datos" : `${valor}% del aforo`
       }
@@ -135,7 +125,7 @@ function EstadisticasCargando() {
 }
 
 /**
- * `/dashboard` — dashboard público (RSC).
+ * `/dashboard` — dashboard público (RSC, dinámico y sin `'use cache'`).
  *
  * No exige sesión: lee la zona con la clave `anon` y RLS. Solo se renderizan agregados;
  * `user_id` y las filas de `sesiones` nunca cruzan al navegador. El rango es una lista
@@ -143,13 +133,17 @@ function EstadisticasCargando() {
  *
  * El contador inicial se pinta en el servidor. La isla de Realtime y los gráficos llegan
  * en tandas posteriores; aquí no hay estado de cliente ni suscripciones.
+ *
+ * `notFound()` se llama ANTES de devolver JSX y antes de cualquier `<Suspense>`: así la
+ * respuesta conserva un 404 real (sin `loading.tsx` en este segmento, que abriría el
+ * streaming y fijaría un 200; ver la nota de entrega de la Tanda 2).
  */
 export default async function PaginaDashboard({ searchParams }: Props) {
   const params = await searchParams;
   const { zona: slugSolicitado, rango } = interpretarQueryDashboard(params);
   const slug = slugSolicitado ?? envPublico.NEXT_PUBLIC_ZONA_POR_DEFECTO;
 
-  const zona = await resolverZona(slug);
+  const zona = await obtenerZonaPorSlug(slug);
   if (!zona || !zona.activa) notFound();
 
   const actual = await obtenerOcupacionActual(zona.id);
@@ -218,21 +212,15 @@ export default async function PaginaDashboard({ searchParams }: Props) {
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-              Ocupación ahora
-            </p>
-            <h2 className="mt-1 text-3xl font-semibold tracking-tight">
-              Dashboard público
-            </h2>
-          </div>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
+            Ocupación ahora
+          </p>
           <p className="max-w-sm text-xs leading-5 text-zinc-500 dark:text-zinc-400">
             Solo cifras agregadas. No mostramos nombres, correos ni horarios
             individuales.
           </p>
         </div>
-
 
         <section
           aria-labelledby="ocupacion-titulo"

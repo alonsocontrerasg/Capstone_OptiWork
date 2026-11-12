@@ -12,9 +12,8 @@ export default async function NoEncontrado() {
         No encontramos esta página
       </h1>
       <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-        Puede que el enlace esté mal escrito o que la página todavía no exista (el QR de
-        entrada y salida apunta a <code className="font-mono">/scan</code>, que llega en la
-        Etapa 4).
+        Puede que el enlace esté mal escrito, que la zona solicitada no exista o ya no
+        esté activa, o que la página todavía no esté disponible.
       </p>
       <Link
         href="/"

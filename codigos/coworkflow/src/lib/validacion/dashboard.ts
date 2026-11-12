@@ -11,8 +11,8 @@ import { esquemaSlugZona } from "@/lib/validacion/qr";
  * y cae en el valor por defecto en vez de romper el dashboard público.
  *
  * `zona` inválida (formato) también se descarta: la página usa la zona por defecto. Un slug
- * VÁLIDO pero inexistente o inactivo se resuelve más adelante y se muestra como estado
- * «zona no disponible».
+ * VÁLIDO pero inexistente o inactivo se resuelve en la página, que llama a `notFound()` y
+ * responde 404 con la pantalla de «no encontrado».
  */
 
 export const RANGOS_DIAS = [7, 30] as const;
