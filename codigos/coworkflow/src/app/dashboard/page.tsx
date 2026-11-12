@@ -53,8 +53,9 @@ function EstadisticasCargando() {
  * cerrada (7|30) y un valor inválido cae al default sin romper la página.
  *
  * El contador inicial se pinta en el servidor y lo refresca en el navegador la isla
- * `ContadorOcupacion` (Realtime sobre `ocupacion_actual`). Los gráficos llegan en la
- * Tanda 4; las tarjetas de texto se calculan aquí, en el servidor.
+ * `ContadorOcupacion` (Realtime sobre `ocupacion_actual`). Las tarjetas de texto y el mapa de
+ * calor también se calculan en el servidor; los gráficos son la única isla de cliente y se
+ * cargan con `ssr: false` desde `GraficosDashboardCarga`.
  *
  * `notFound()` se llama ANTES de devolver JSX y antes de cualquier `<Suspense>`: así la
  * respuesta conserva un 404 real (sin `loading.tsx` en este segmento, que abriría el
@@ -147,6 +148,9 @@ export default async function PaginaDashboard({ searchParams }: Props) {
             zonaId={zona.id}
             timezone={zona.timezone}
             rango={rango}
+            aforoMax={zona.aforo_max}
+            horaApertura={apertura}
+            horaCierre={cierre}
           />
         </Suspense>
 

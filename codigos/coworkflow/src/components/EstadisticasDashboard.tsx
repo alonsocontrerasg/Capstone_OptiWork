@@ -9,40 +9,65 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { GraficosDashboardCarga } from "@/components/GraficosDashboardCarga";
+import { MapaCalorDashboard } from "@/components/MapaCalorDashboard";
 import {
+  construirPuntosHoy,
+  construirPuntosPorHora,
   construirSeriePorHora,
   etiquetaHora,
   formatearPermanencia,
   formatearPersonas,
   horaPunta,
+  horasDelHorario,
   type FilaFranja,
+  type HorarioZona,
 } from "@/lib/dominio/estadisticas";
 import { limitesRangoDias } from "@/lib/dominio/tiempo";
 import {
   obtenerFranjas,
+  obtenerOcupacionHoy,
   obtenerPermanenciaPromedio,
   obtenerPersonasDistintas,
   type ResultadoRpc,
 } from "@/lib/supabase/dashboard";
 import type { RangoDias } from "@/lib/validacion/dashboard";
 
+
 /**
- * Estadísticas de texto del dashboard, renderizadas en el servidor.
+ * Estadísticas del dashboard, renderizadas en el servidor.
  *
- * Las tres lecturas se lanzan en paralelo. Cada tarjeta conserva su propio estado: una RPC
- * caída muestra «No se pudo cargar» solo en esa tarjeta, mientras las demás siguen visibles.
+ * Las lecturas se lanzan en paralelo. Cada bloque conserva su propio estado: una RPC caída
+ * muestra «No se pudo cargar» solo en su tarjeta, mientras el resto sigue visible.
  * `valor === null` (k-anonimato de la RPC) no es un error: se muestra «Sin datos suficientes».
  * Ese k-anonimato aplica a permanencia y personas distintas, que describen a individuos; la
- * hora punta es un promedio de ocupación y no depende de esa regla.
+ * hora punta, los gráficos y el mapa de calor son promedios de ocupación y no dependen de esa
+ * regla.
  *
- * Solo viajan agregados: esta función no se importa desde ningún Client Component. Los
- * gráficos y el mapa de calor llegan en la Tanda 4.
+ * Solo viajan agregados: esta función no se importa desde ningún Client Component. Lo único
+ * que cruza al navegador son puntos ya reducidos (`construirPuntosPorHora`) y la matriz del
+ * mapa de calor, que se pinta como HTML en el servidor.
+ *
+ * Se piden tres juegos de franjas: las del rango elegido (tarjetas y gráfico por hora), las de
+ * los últimos 30 días (mapa de calor, que necesita la muestra más amplia) y los snapshots de
+ * hoy. Cuando `rango === 30` se reutiliza la misma promesa y no se duplica la consulta.
  */
+
+/** El mapa de calor usa siempre 30 días: 7 daría muy pocas muestras por celda (día × hora). */
+const DIAS_MAPA_CALOR: RangoDias = 30;
+
 type Props = {
   zonaId: string;
   timezone: string;
   rango: RangoDias;
+  /** Aforo máximo de la zona: base del color del mapa de calor. */
+  aforoMax: number;
+  /** Hora de apertura ya parseada (`null` si la zona no la declara). */
+  horaApertura: number | null;
+  /** Hora de cierre ya parseada; `24` es válido (medianoche). */
+  horaCierre: number | null;
 };
+
 
 type Tono = "normal" | "vacio" | "error";
 
@@ -166,6 +191,9 @@ export async function EstadisticasDashboard({
   zonaId,
   timezone,
   rango,
+  aforoMax,
+  horaApertura,
+  horaCierre,
 }: Props) {
   const limites = limitesRangoDias(new Date(), timezone, rango);
   if (!limites) {
@@ -175,19 +203,48 @@ export async function EstadisticasDashboard({
     );
   }
 
-  const [franjas, permanencia, personas] = await Promise.all([
-    obtenerFranjas(zonaId, rango),
-    limites
-      ? obtenerPermanenciaPromedio(zonaId, limites.desde, limites.hasta)
-      : Promise.resolve<ResultadoRpc<number | null>>({ ok: false }),
-    limites
-      ? obtenerPersonasDistintas(zonaId, limites.desde, limites.hasta)
-      : Promise.resolve<ResultadoRpc<number | null>>({ ok: false }),
-  ]);
+  const peticionFranjas = obtenerFranjas(zonaId, rango);
+  const peticionFranjasMapa =
+    rango === DIAS_MAPA_CALOR
+      ? peticionFranjas
+      : obtenerFranjas(zonaId, DIAS_MAPA_CALOR);
+
+  const [franjas, franjasMapa, snapshotsHoy, permanencia, personas] =
+    await Promise.all([
+      peticionFranjas,
+      peticionFranjasMapa,
+      obtenerOcupacionHoy(zonaId),
+      limites
+        ? obtenerPermanenciaPromedio(zonaId, limites.desde, limites.hasta)
+        : Promise.resolve<ResultadoRpc<number | null>>({ ok: false }),
+      limites
+        ? obtenerPersonasDistintas(zonaId, limites.desde, limites.hasta)
+        : Promise.resolve<ResultadoRpc<number | null>>({ ok: false }),
+    ]);
 
   const permanenciaTexto = textoPermanencia(permanencia);
   const personasTexto = textoPersonas(personas);
   const punta = textoHoraPunta(franjas);
+
+  // Horario sólo si la zona lo declara de forma coherente; si no, `horasDelHorario` devuelve
+  // el día completo y la matriz/curva siguen siendo válidas.
+  const horario: HorarioZona | null =
+    horaApertura !== null && horaCierre !== null && horaCierre > horaApertura
+      ? { apertura: horaApertura, cierre: horaCierre }
+      : null;
+
+  const horas = horasDelHorario(horario);
+
+  // `null` = la RPC falló (el bloque muestra su propio aviso) y `[]` = no hay datos.
+  const puntosPorHora = franjas.ok
+    ? construirPuntosPorHora(franjas.valor, horas)
+    : null;
+  const puntosHoy =
+    snapshotsHoy === null
+      ? null
+      : construirPuntosHoy(snapshotsHoy, timezone, horas, horario);
+  const filasMapaCalor = franjasMapa.ok ? franjasMapa.valor : null;
+
 
   return (
     <section aria-labelledby="estadisticas-titulo" className="mt-8">
@@ -203,9 +260,12 @@ export async function EstadisticasDashboard({
             Últimos {rango} días · solo cifras agregadas.
           </p>
         </div>
-        {!franjas.ok || !permanencia.ok || !personas.ok ? (
+        {!franjas.ok ||
+        !permanencia.ok ||
+        !personas.ok ||
+        snapshotsHoy === null ? (
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Algunas tarjetas no están disponibles en este momento.
+            Algunas secciones no están disponibles en este momento.
           </p>
         ) : null}
       </div>
@@ -234,20 +294,24 @@ export async function EstadisticasDashboard({
         </TarjetaEstadistica>
       </dl>
 
-      <div className="mt-6 rounded-2xl border border-dashed border-zinc-300 p-5 dark:border-zinc-700">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="flex items-center gap-2 text-sm font-semibold">
-            <CalendarDays aria-hidden className="size-4" />
-            Gráficos de ocupación
-          </h3>
-          <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-            Tanda 4
-          </span>
-        </div>
-        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Aquí irán el gráfico por hora del día y el mapa de calor día × hora. En esta
-          tanda solo se muestran los agregados de texto.
-        </p>
+      <div className="mt-6 space-y-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <CalendarDays aria-hidden className="size-4" />
+          Ocupación por hora y por día
+        </h3>
+
+        <GraficosDashboardCarga
+          porHora={puntosPorHora}
+          hoy={puntosHoy}
+          dias={rango}
+        />
+
+        <MapaCalorDashboard
+          filas={filasMapaCalor}
+          horas={horas}
+          aforoMax={aforoMax}
+          horario={horario}
+        />
       </div>
     </section>
   );

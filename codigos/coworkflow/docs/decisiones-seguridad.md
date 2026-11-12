@@ -1310,6 +1310,95 @@ llega al navegador (S-07) y sigue sin estar disponible para `anon`/`authenticate
 
 ---
 
+## Etapa 5 — Dashboard en tiempo real (Tanda 2: gráficos y mapa de calor)
+
+> S-37 y S-38 (Tanda 1: agregados en Postgres y estadísticas por RSC) quedaron documentadas en la
+> sección de la Etapa 4 por continuidad del archivo; estas tres son de la Tanda 2.
+
+### S-39 · Recharts como isla de cliente con `ssr: false`, sin relajar la CSP
+
+**Decisión.** Los dos gráficos (promedio por hora del día y curva de hoy) viven en
+`src/components/GraficosDashboard.tsx` (`"use client"`) y se cargan desde
+`GraficosDashboardCarga.tsx` con `next/dynamic(..., { ssr: false })`. La CSP de producción
+(`src/proxy.ts`) se mantiene igual: `script-src` sin `'unsafe-eval'` y `style-src` sin
+`'unsafe-inline'`.
+
+**Amenaza.** (1) XSS por estilos: Recharts escribe estilos por CSSOM y los emite como atributos
+`style` en el SVG; si se renderizara en el servidor, ese HTML llegaría con `style=` y la única
+forma de que el navegador lo aplicara sería añadiendo `'unsafe-inline'` a `style-src`, lo que
+reabriría la inyección de CSS/atributos en toda la app. (2) Superficie de hidratación: cuanto
+menos HTML del servidor dependa de JavaScript de terceros para verse bien, menos formas hay de
+romper la página con un error de render.
+
+**Por qué esta solución.** Con `ssr: false` el SVG nunca viaja en el HTML: lo construye el propio
+JavaScript ya autorizado por el nonce, y la CSP no bloquea la manipulación del DOM desde
+JavaScript. Así no hay que debilitar ninguna directiva. `ssr: false` no está permitido dentro de
+un Server Component, y `EstadisticasDashboard` lo es (importa `server-only`); por eso el
+envoltorio de cliente separado. Como efecto secundario, Recharts sale del HTML inicial y la
+página pesa menos en el primer byte.
+
+**Dónde se implementa.** `src/components/GraficosDashboard.tsx`,
+`src/components/GraficosDashboardCarga.tsx` y `src/app/dashboard/page.tsx` (Tanda 2 de la Etapa 5).
+
+**Tradeoff.** El gráfico aparece tras hidratar (se muestra un esqueleto con las mismas
+dimensiones para no mover el layout) y las tablas de datos accesibles también llegan con el
+JavaScript. Por eso el mapa de calor, que sí es crítico, se renderiza en el servidor (S-40).
+
+### S-40 · El mapa de calor se pinta en el servidor como tabla HTML con datos ya agregados
+
+**Decisión.** `MapaCalorDashboard` es un Server Component (`import "server-only"`) que recibe las
+franjas de 30 días ya agregadas y arma una `<table>` de 7 filas (lunes→domingo) × las horas del
+horario de la zona. No usa Recharts ni estilos inline: los cinco niveles de color son clases
+Tailwind literales de una sola gama. Cada celda imprime el número (`Math.round`) y `—` cuando no
+hubo muestras; la leyenda no depende solo del color.
+
+**Amenaza.** (1) Dependencia de JavaScript: si el mapa de calor fuera una isla de cliente, quedaría
+vacío sin JS o con un chunk bloqueado, y es el gráfico que más se mira. (2) Fuga de datos: una
+rejilla día × hora es el gráfico con más riesgo de re-identificación si se alimentara de sesiones
+individuales. (3) XSS: cualquier color calculado en línea obligaría a `style=`, incompatible con la
+CSP (S-39).
+
+**Por qué esta solución.** La matriz se calcula con `construirMatrizCalor`, que solo promedia
+ocupación (promedio ponderado por `muestras`), no personas: sigue el mismo criterio que S-18/S-23
+—los gráficos son promedios de ocupación y no dependen del k-anonimato de los datos individuales—.
+Al ser `<table>` semántica (con `caption` sr-only y `scope` en los encabezados) funciona sin
+JavaScript, con lector de pantalla y con contraste en tema claro y oscuro, y el HTML que sale del
+servidor no necesita ninguna excepción de CSP.
+
+**Dónde se implementa.** `src/components/MapaCalorDashboard.tsx` (recibe `filas`, `horas`,
+`aforoMax` y `horario`), `construirMatrizCalor`/`horasDelHorario` en
+`src/lib/dominio/estadisticas.ts` y el cableado en `src/components/EstadisticasDashboard.tsx`.
+
+**Tradeoff.** Siempre se consulta el rango de 30 días para el mapa (una RPC más, acotada a ≤168
+filas), y con `rango=7` las tarjetas y el mapa cubren ventanas distintas: se explica en el texto de
+la tarjeta para que no se lea como inconsistencia.
+
+### S-41 · `z.config({ jitless: true })` en el cliente para no necesitar `'unsafe-eval'`
+
+**Decisión.** `src/instrumentation-client.ts` (se ejecuta en el navegador antes de que la app sea
+interactiva) apaga el compilador JIT de Zod con `jitless`. La CSP no gana `'unsafe-eval'`.
+
+**Amenaza.** (1) Ruido y falsos positivos: Zod 4 compila validadores con `new Function`, y bajo
+`script-src` sin `'unsafe-eval'` el navegador rechaza la sonda y reporta un
+`securitypolicyviolation` en la consola en cada carga, lo que en una demo parece un fallo de
+seguridad. (2) La tentación de "arreglarlo" añadiendo `'unsafe-eval'` a la CSP, que habilitaría
+ejecutar cadenas como código y multiplicaría el impacto de cualquier XSS.
+
+**Por qué esta solución.** Zod sí llega al bundle de cliente: `src/lib/env.ts` valida los
+`NEXT_PUBLIC_*` con Zod y `src/lib/supabase/browser.ts` lo importa desde la isla del contador. Con
+`jitless` la validación es idéntica en resultado y solo algo más lenta (irrelevante para 4 variables
+de entorno). Ponerlo en `instrumentation-client.ts` —y no dentro de `env.ts`— garantiza que el
+ajuste se aplique antes de cualquier otro módulo y que nunca afecte al servidor, donde el JIT sí
+conviene.
+
+**Dónde se implementa.** `src/instrumentation-client.ts`; CSP en `src/proxy.ts` (sin cambios).
+
+**Tradeoff.** Si en el futuro un Client Component usa Zod de forma intensiva (por ejemplo, validar
+un formulario grande), perderá el JIT también en el navegador; se acepta porque el rendimiento no es
+el cuello de botella y la alternativa era debilitar la CSP.
+
+---
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
@@ -1343,3 +1432,5 @@ llega al navegador (S-07) y sigue sin estar disponible para `anon`/`authenticate
 | 2026-11-11 | Verificación contra `supabase/migrations/20261110000000_consentimiento_y_scan.sql`: el umbral es `c_max_invalidos_min := 10` sobre `eventos_scan` con `ts > now() - interval '1 minute'` y `resultado not in ('entrada_ok','salida_ok')`, y corta con `v_invalidos >= 10` (bloque `-- 1)` de la migración, paso 3 de la lista de `modelo-datos.md`). Se precisa la semántica del umbral en ambos documentos y `arquitectura.md` §5.2 remite a S-36 por la limitación de `requireAdmin()` con `getClaims()` |
 | 2026-11-11 | Etapa 5 (Tanda 1): agregados del dashboard en Postgres y solo agregados al navegador, por el tope de 1000 filas de PostgREST (S-38); estadísticas por RSC sin Upstash, con rangos cerrados solo en la UI y la limitación de las RPC de rango libre declarada (S-37). Se corrige S-23 para no atribuirse una mitigación que no se implementó y la decisión de UI del toggle 7/30 se funde en S-37 |
 | 2026-11-11 | Verificación DST de `tiempo.ts` contra un Postgres 18 temporal (`America/Santiago`): los mediodías locales de `2026-09-06` y `2026-04-05` y sus ventanas de 7 días coinciden al milisegundo con `date_trunc('day', … at time zone …) at time zone …` y con el redondeo a medianoche de la migración 9. También se probó la migración 9 en ese Postgres: `p_dias=5` → 0 filas, `p_dias=30` ≤168, `ocupacion_hoy` solo el día local, `anon`/`authenticated` con EXECUTE, `PUBLIC` sin él; `service_role` con EXECUTE en `refrescar_ocupacion`, confirmado también en Supabase el 2026-11-11 |
+| 2026-11-12 | Etapa 5 (Tanda 2): Recharts como isla de cliente con `ssr: false` para no relajar la CSP (S-39), mapa de calor día × hora renderizado en el servidor como tabla HTML con datos agregados (S-40) y `z.config({ jitless: true })` en `src/instrumentation-client.ts` para que Zod no use `new Function` (S-41). Se cablean `aforoMax`, `hora_apertura` y `hora_cierre` de la zona en `EstadisticasDashboard` y se añaden `construirPuntosPorHora`, `construirPuntosHoy` y `horasDelHorario` en `src/lib/dominio/estadisticas.ts` |
+

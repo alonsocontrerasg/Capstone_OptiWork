@@ -30,6 +30,25 @@ export type HorarioZona = { apertura: number; cierre: number };
 
 export type PuntoHora = { hora: number; promedio: number };
 
+/**
+ * Punto que viaja al Client Component del gráfico de barras: SOLO la etiqueta ya formateada,
+ * el promedio redondeado a 1 decimal y cuántas muestras lo respaldan. Nada de snapshots.
+ */
+export type PuntoPromedioHora = {
+  etiqueta: string;
+  promedio: number;
+  muestras: number;
+};
+
+/**
+ * Punto que viaja al Client Component de la curva de hoy: `cantidad === null` es un hueco
+ * (no hubo snapshots en esa hora), nunca un 0 inventado.
+ */
+export type PuntoHoraHoy = {
+  etiqueta: string;
+  cantidad: number | null;
+};
+
 export const DIAS_SEMANA = [
   "Lunes",
   "Martes",
@@ -239,5 +258,106 @@ export function etiquetaHora(hora: number): string {
 export function nombreDia(dow: number): string {
   if (!Number.isInteger(dow) || dow < 1 || dow > DIAS_POR_SEMANA) return "—";
   return DIAS_SEMANA[dow - 1];
+}
+
+/**
+ * Horas (0..23) que cubre el horario de la zona, EN ORDEN: `{8, 20}` → `[8 … 19]`.
+ *
+ * Las columnas del mapa de calor y las etiquetas de los gráficos se derivan de aquí y no de
+ * la lista de filas recibidas: así el eje es estable aunque falten horas sin snapshots. El
+ * cierre `24:00` de Postgres se recorta a 23 (la hora 24 no existe como columna).
+ * Un horario ausente o incoherente devuelve el día completo: es preferible mostrar 24
+ * columnas vacías a inventar un horario que la zona no declaró.
+ */
+export function horasDelHorario(horario: HorarioZona | null): number[] {
+  const valido =
+    horario !== null &&
+    Number.isInteger(horario.apertura) &&
+    Number.isInteger(horario.cierre) &&
+    horario.apertura >= 0 &&
+    horario.apertura < HORAS_POR_DIA &&
+    horario.cierre > horario.apertura;
+
+  const apertura = valido ? horario.apertura : 0;
+  const cierre = valido ? Math.min(horario.cierre, HORAS_POR_DIA) : HORAS_POR_DIA;
+
+  const horas: number[] = [];
+  for (let hora = apertura; hora < cierre; hora += 1) horas.push(hora);
+  return horas;
+}
+
+/** Redondeo a 1 decimal: el payload del cliente no lleva precisión de `double precision`. */
+function redondearAUnDecimal(valor: number): number {
+  return Math.round(valor * 10) / 10;
+}
+
+/**
+ * Puntos del gráfico «promedio por hora del día» para las `horas` pedidas.
+ *
+ * - Reutiliza `construirSeriePorHora`, así el promedio sigue ponderado por `muestras`.
+ * - Omite las horas sin datos en el rango (una barra ausente es más honesta que una barra
+ *   en 0, que sugeriría «cero personas» cuando en realidad no hubo snapshots).
+ * - `muestras` es la suma de snapshots de esa hora en todos los días del rango.
+ * - El resultado tiene como máximo 24 elementos, con números ya redondeados a 1 decimal.
+ */
+export function construirPuntosPorHora(
+  filas: readonly FilaFranja[],
+  horas: readonly number[],
+): PuntoPromedioHora[] {
+  const serie = construirSeriePorHora(filas);
+  const muestras = new Array<number>(HORAS_POR_DIA).fill(0);
+  const permitidas = new Set(horas);
+
+  for (const fila of filas) {
+    const normalizada = normalizarFila(fila);
+    if (!normalizada || !permitidas.has(normalizada.hora)) continue;
+    muestras[normalizada.hora] += normalizada.muestras;
+  }
+
+  const puntos: PuntoPromedioHora[] = [];
+  for (const hora of horas) {
+    if (!Number.isInteger(hora) || hora < 0 || hora >= HORAS_POR_DIA) continue;
+
+    const promedio = serie[hora];
+    if (promedio === null || !Number.isFinite(promedio)) continue;
+
+    puntos.push({
+      etiqueta: etiquetaHora(hora),
+      promedio: redondearAUnDecimal(promedio),
+      muestras: muestras[hora],
+    });
+  }
+
+  return puntos;
+}
+
+/**
+ * Puntos de la curva de HOY para las `horas` pedidas. Conserva los huecos (`cantidad:
+ * null`) porque en una serie temporal un tramo sin snapshots no es un 0: dibujar 0 haría
+ * parecer que el cowork quedó vacío cuando en realidad no hay lecturas.
+ */
+export function construirPuntosHoy(
+  filas: readonly PuntoSnapshot[],
+  timezone: string,
+  horas: readonly number[],
+  horario: HorarioZona | null = null,
+): PuntoHoraHoy[] {
+  const serie = construirSerieHoy(filas, timezone, horario);
+
+  const puntos: PuntoHoraHoy[] = [];
+  for (const hora of horas) {
+    if (!Number.isInteger(hora) || hora < 0 || hora >= HORAS_POR_DIA) continue;
+
+    const cantidad = serie[hora];
+    puntos.push({
+      etiqueta: etiquetaHora(hora),
+      cantidad:
+        cantidad === null || !Number.isFinite(cantidad)
+          ? null
+          : redondearAUnDecimal(cantidad),
+    });
+  }
+
+  return puntos;
 }
 
