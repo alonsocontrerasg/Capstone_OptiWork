@@ -46,23 +46,32 @@ export default async function Home() {
             </div>
           </div>
 
-          {sesion ? (
-            <form action="/auth/signout" method="post">
-              <button
-                type="submit"
-                className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-900"
-              >
-                Cerrar sesión
-              </button>
-            </form>
-          ) : (
+          <div className="flex items-center gap-2">
             <Link
-              href="/login"
-              className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+              href="/dashboard"
+              className="rounded-full px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              Iniciar sesión
+              Dashboard
             </Link>
-          )}
+
+            {sesion ? (
+              <form action="/auth/signout" method="post">
+                <button
+                  type="submit"
+                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                >
+                  Cerrar sesión
+                </button>
+              </form>
+            ) : (
+              <Link
+                href="/login"
+                className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                Iniciar sesión
+              </Link>
+            )}
+          </div>
         </div>
       </header>
 
@@ -127,9 +136,12 @@ export default async function Home() {
                     Abrir QR rotativo
                   </Link>
                 )}
-                <span className="rounded-full border border-dashed border-zinc-300 px-4 py-2 text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                  El dashboard llega en la Etapa 5
-                </span>
+                <Link
+                  href="/dashboard"
+                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                >
+                  Ver dashboard
+                </Link>
               </div>
             </div>
 

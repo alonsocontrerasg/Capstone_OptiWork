@@ -8,8 +8,10 @@ import { esRangoDias, type RangoDias } from "@/lib/validacion/dashboard";
  * Lecturas del dashboard público con el cliente de servidor (rol `anon`, RLS activa).
  *
  * Convención de errores:
- * - `null` = la consulta FALLÓ (se registra en el log; la UI muestra «error»).
- * - `[]` = la consulta funcionó pero no hay filas (la UI muestra «sin datos»).
+ * - `obtenerOcupacionActual` devuelve `null` si la lectura falla.
+ * - Las funciones que alimentan tarjetas devuelven `ResultadoRpc`: `{ ok: false }` si la RPC
+ *   falló y `{ ok: true, valor }` si respondió (con `valor: null` cuando no hay datos
+ *   publicables). Así una tarjeta puede mostrar su propio error sin tumbar la página.
  *
  * Nunca se traen snapshots crudos de 30 días: PostgREST corta en 1000 filas y hay ~8.640.
  * `ocupacion_por_franja` agrega en Postgres y devuelve como máximo 168 filas. Los snapshots de
@@ -21,6 +23,10 @@ export type OcupacionActual = {
   cantidad: number;
   updatedAt: string | null;
 };
+
+export type ResultadoRpc<T> =
+  | { ok: true; valor: T }
+  | { ok: false };
 
 function aEnteroNoNegativo(valor: unknown): number | null {
   const numero = typeof valor === "string" ? Number(valor) : valor;
@@ -113,8 +119,8 @@ export async function obtenerOcupacionActual(
 export async function obtenerFranjas(
   zonaId: string,
   dias: RangoDias,
-): Promise<FilaFranja[] | null> {
-  if (!esRangoDias(dias)) return null;
+): Promise<ResultadoRpc<FilaFranja[]>> {
+  if (!esRangoDias(dias)) return { ok: false };
 
   const supabase = await crearClienteServidor();
   const { data, error } = await supabase.rpc("ocupacion_por_franja", {
@@ -127,10 +133,10 @@ export async function obtenerFranjas(
       "[dashboard] ocupacion_por_franja falló:",
       error.message,
     );
-    return null;
+    return { ok: false };
   }
 
-  if (!Array.isArray(data)) return [];
+  if (!Array.isArray(data)) return { ok: true, valor: [] };
 
   const filas: FilaFranja[] = [];
   for (const valor of data as unknown[]) {
@@ -138,7 +144,7 @@ export async function obtenerFranjas(
     if (fila) filas.push(fila);
   }
 
-  return filas;
+  return { ok: true, valor: filas };
 }
 
 /**
@@ -177,9 +183,9 @@ export async function obtenerPermanenciaPromedio(
   zonaId: string,
   desde: Date,
   hasta: Date,
-): Promise<number | null> {
+): Promise<ResultadoRpc<number | null>> {
   if (Number.isNaN(desde.getTime()) || Number.isNaN(hasta.getTime())) {
-    return null;
+    return { ok: false };
   }
 
   const supabase = await crearClienteServidor();
@@ -194,14 +200,16 @@ export async function obtenerPermanenciaPromedio(
       "[dashboard] permanencia_promedio falló:",
       error.message,
     );
-    return null;
+    return { ok: false };
   }
 
-  return typeof data === "number" &&
-    Number.isFinite(data) &&
-    data >= 0
-    ? data
-    : null;
+  return {
+    ok: true,
+    valor:
+      typeof data === "number" && Number.isFinite(data) && data >= 0
+        ? data
+        : null,
+  };
 }
 
 /**
@@ -212,9 +220,9 @@ export async function obtenerPersonasDistintas(
   zonaId: string,
   desde: Date,
   hasta: Date,
-): Promise<number | null> {
+): Promise<ResultadoRpc<number | null>> {
   if (Number.isNaN(desde.getTime()) || Number.isNaN(hasta.getTime())) {
-    return null;
+    return { ok: false };
   }
 
   const supabase = await crearClienteServidor();
@@ -229,9 +237,9 @@ export async function obtenerPersonasDistintas(
       "[dashboard] personas_distintas falló:",
       error.message,
     );
-    return null;
+    return { ok: false };
   }
 
   // bigint puede llegar como number o string; null = k-anonimato (< 5 personas).
-  return aEnteroNoNegativo(data);
+  return { ok: true, valor: aEnteroNoNegativo(data) };
 }
