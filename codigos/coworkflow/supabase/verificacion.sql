@@ -20,6 +20,8 @@ declare
   v_rel      record;
   v_priv     text;
   v_proc     record;
+  v_zona     uuid;
+  v_acl      aclitem[];
   -- Lista blanca de funciones que pueden tener EXECUTE para anon y/o authenticated.
   -- Quién exactamente (solo authenticated vs anon+authenticated) lo valida el bloque 10).
   v_permitidas oid[] := array[
@@ -27,7 +29,9 @@ declare
     to_regprocedure('public.registrar_consentimiento(integer)'),
     to_regprocedure('public.es_admin()'),
     to_regprocedure('public.permanencia_promedio(uuid,timestamptz,timestamptz)'),
-    to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)')
+    to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)'),
+    to_regprocedure('public.ocupacion_por_franja(uuid,integer)'),
+    to_regprocedure('public.ocupacion_hoy(uuid)')
   ];
 begin
   -- 1) RLS activa en las 8 tablas
@@ -212,6 +216,8 @@ begin
     'public.registrar_consentimiento(integer)',
     'public.permanencia_promedio(uuid,timestamptz,timestamptz)',
     'public.personas_distintas(uuid,timestamptz,timestamptz)',
+    'public.ocupacion_por_franja(uuid,integer)',
+    'public.ocupacion_hoy(uuid)',
     'public.cron_snapshot()',
     'public.cron_cierre_auto()',
     'public.cron_resumen_diario()',
@@ -223,7 +229,8 @@ begin
       continue;
     end if;
 
-    select p.prosecdef, p.proconfig into v_definer, v_proconfig
+    select p.prosecdef, p.proconfig, p.proacl
+      into v_definer, v_proconfig, v_acl
     from pg_proc p where p.oid = v_oid;
 
     if not v_definer then
@@ -238,9 +245,20 @@ begin
     v_anon := has_function_privilege('anon', v_oid, 'EXECUTE');
     v_auth := has_function_privilege('authenticated', v_oid, 'EXECUTE');
 
-    if v_nombre in ('public.permanencia_promedio', 'public.personas_distintas') then
+    if v_nombre in ('public.permanencia_promedio', 'public.personas_distintas',
+                    'public.ocupacion_por_franja', 'public.ocupacion_hoy') then
       if not v_anon or not v_auth then
         v_errores := v_errores || format('%s debe ser ejecutable por anon y authenticated', v_firma);
+      end if;
+
+      -- Los agregados del dashboard no deben conservar el EXECUTE implícito de PUBLIC:
+      -- se revoca explícitamente y solo anon/authenticated lo reciben.
+      if v_nombre in ('public.ocupacion_por_franja', 'public.ocupacion_hoy') then
+        if v_acl is null
+           or exists (select 1 from aclexplode(v_acl) a
+                      where a.grantee = 0 and a.privilege_type = 'EXECUTE') then
+          v_errores := v_errores || format('%s conserva EXECUTE para PUBLIC', v_firma);
+        end if;
       end if;
     elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin') then
       if v_anon then
@@ -315,12 +333,28 @@ begin
     v_errores := v_errores || format('%s zonas activas sin fila en ocupacion_actual', v_total);
   end if;
 
+  -- 14) Agregados del dashboard: solo 7/30 días y la curva de hoy no supera 288 filas.
+  select z.id into v_zona from public.zonas z order by z.slug limit 1;
+  if v_zona is null then
+    raise notice 'AVISO: no hay zonas; se omite la prueba de ocupacion_por_franja/ocupacion_hoy.';
+  else
+    select count(*) into v_total from public.ocupacion_por_franja(v_zona, 5);
+    if v_total <> 0 then
+      v_errores := v_errores || format('ocupacion_por_franja con p_dias=5 devolvió %s filas (debe ser 0)', v_total);
+    end if;
+
+    select count(*) into v_total from public.ocupacion_hoy(v_zona);
+    if v_total > 288 then
+      v_errores := v_errores || format('ocupacion_hoy devolvió %s filas (máximo 288)', v_total);
+    end if;
+  end if;
+
   -- Resultado
   if array_length(v_errores, 1) > 0 then
     raise exception 'Verificación FALLÓ (% problemas):%  %',
       array_length(v_errores, 1), E'\n - ', array_to_string(v_errores, E'\n - ');
   end if;
 
-  raise notice 'Verificación OK: RLS, políticas, privilegios, funciones, Realtime y cron correctos.';
+  raise notice 'Verificación OK: RLS, políticas, privilegios, funciones, agregados del dashboard, Realtime y cron correctos.';
 end $$;
 

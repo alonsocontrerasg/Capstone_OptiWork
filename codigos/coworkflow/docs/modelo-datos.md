@@ -18,6 +18,7 @@ Supabase, **en orden de nombre de archivo**, y al final se ejecuta `verificacion
 | 6 | `20261106000005_stats.sql` | estadísticas públicas con k-anonimato por personas distintas |
 | 7 | `20261106000006_pg_cron_jobs.sql` | snapshots, cierre automático, resumen diario y retención |
 | 8 | `20261110000000_consentimiento_y_scan.sql` | Etapa 3: `sin_consentimiento`, RPC `registrar_consentimiento` y `registrar_scan` con gate de consentimiento |
+| 9 | `20261111000000_dashboard_agregados.sql` | Etapa 5: agregados del dashboard (`ocupacion_por_franja` y `ocupacion_hoy`) sobre `snapshots_ocupacion`, sin PII |
 
 > ⚠️ La migración 8 empieza con un `alter type ... add value` **aislado**: hay que seleccionarlo y
 > ejecutarlo solo, y después el resto del archivo. Postgres no permite usar un valor nuevo de un enum
@@ -135,6 +136,43 @@ debe mostrarlo como «sin datos».
 impide comparar dos rangos solapados y despejar la celda restante (ataque por diferencia); ver
 `docs/decisiones-seguridad.md` (S-23).
 
+### Agregados del dashboard (`dashboard_agregados.sql`, migración 9)
+
+El dashboard público **no** lee `snapshots_ocupacion` crudo: PostgREST corta cada respuesta en
+1000 filas y 30 días de snapshots cada 5 min son ~8.640, así que la consulta se truncaría en
+silencio. La migración 9 agrega en Postgres y devuelve como máximo 168 filas (7 días × 24 horas)
+o 288 (un día):
+
+- `ocupacion_por_franja(p_zona_id uuid, p_dias integer)` devuelve
+  `(dow integer, hora integer, promedio double precision, muestras bigint)`.
+  - `p_dias` solo acepta **7 o 30**; cualquier otro valor (incluido `NULL`) devuelve el conjunto
+    vacío, no un error. Es una lista cerrada: el cliente no puede pedir rangos arbitrarios.
+  - La ventana son **días civiles completos de la zona**: `p_dias` días que terminan en la
+    medianoche local de hoy, rango semiabierto `[desde, hasta)`. Se calcula sobre el reloj local
+    (`now() at time zone z.timezone`) y luego se vuelve a `timestamptz`, así que atraviesa los
+    cambios de horario de verano sin correrse un día.
+  - `dow` es ISO 8601 (`1` = lunes … `7` = domingo) y `hora` es `0..23`, ambos en la zona horaria
+    de la zona.
+  - Solo se agregan snapshots cuya hora local cae en `[hora_apertura, hora_cierre)`; el mapa de
+    calor nunca muestra horas en que el cowork está cerrado. `promedio` es el promedio de las
+    muestras existentes de esa celda y `muestras` cuántas hay: una celda sin muestras **no
+    aparece** y el dashboard la pinta como «sin dato», nunca como `0`.
+  - El resultado va ordenado por `dow, hora` y usa el índice `(zona_id, ts)` de la PK.
+
+- `ocupacion_hoy(p_zona_id uuid)` devuelve `(ts timestamptz, cantidad integer)`: los snapshots del
+  día local actual, `[medianoche local, siguiente medianoche local)`, ordenados por `ts` y con
+  `limit 288` (24 h × 12 bins de 5 min). Alimenta la curva de «hoy», para que el dashboard no
+  quede vacío durante el primer día.
+
+Ambas son `SECURITY DEFINER` con `search_path = public, pg_temp`, `STABLE`, y solo leen
+`snapshots_ocupacion` (agregados; no hay `user_id` ni sesiones). `EXECUTE` se revoca a `public`
+y se concede únicamente a `anon` y `authenticated`; `verificacion.sql` comprueba además que no
+quede el grant implícito a `PUBLIC` y que `p_dias = 5` devuelva 0 filas.
+
+`resumen_diario` **no** se usa en el dashboard: sus `entradas`/`salidas`/`pico` no pasan por
+k-anonimato. Las únicas estadísticas de sesiones que se muestran son `permanencia_promedio` y
+`personas_distintas`, que exigen `count(distinct user_id) >= 5`.
+
 ### `app_secrets`
 `clave` PK `text`, `valor` `text not null`, `actualizado_at`. RLS activa, **sin políticas**.
 Solo se lee mediante funciones `SECURITY DEFINER`.
@@ -171,6 +209,8 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 | `es_admin()` | ✗ | ✓ | helper RLS |
 | `permanencia_promedio(...)` | ✓ | ✓ | estadística pública (solo `cierre = 'usuario'`) |
 | `personas_distintas(...)` | ✓ | ✓ | estadística pública (`count(distinct user_id)`) |
+| `ocupacion_por_franja(uuid, integer)` | ✓ | ✓ | agregado público día ISO × hora (solo snapshots, 7 o 30 días) |
+| `ocupacion_hoy(uuid)` | ✓ | ✓ | snapshots del día local actual (máx. 288, solo agregados) |
 | `handle_new_user`, `proteger_rol`, `validar_timezone_zona`, `refrescar_ocupacion`, `crear_ocupacion_inicial`, `actualizar_ocupacion`, `obtener_secreto_qr`, `zona_abierta`, `cron_*` | ✗ | ✗ | solo trigger/cron/RPC interno |
 
 ## Jobs de pg_cron
