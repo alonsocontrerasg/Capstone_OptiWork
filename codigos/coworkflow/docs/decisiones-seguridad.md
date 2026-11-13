@@ -54,6 +54,11 @@
 | S-36 | `getClaims()` no detecta revocación; `/admin` usará `getUser()` | 4 · 6 |
 | S-37 | Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI | 5 |
 | S-38 | Agregados en Postgres y solo agregados al navegador (tope de 1000 filas) | 5 |
+| S-39 | Recharts como isla de cliente con `ssr: false`, sin relajar la CSP | 5 |
+| S-40 | Mapa de calor como tabla HTML en el servidor; celdas sin k-anonimato | 5 |
+| S-41 | `z.config({ jitless: true })` en el cliente para no necesitar `'unsafe-eval'` | 5 |
+| S-42 | Cliente de navegador solo para Realtime: sin sesión y solo `ocupacion_actual` | 5 |
+| S-43 | Script de simulación local: `service_role` desde el entorno y confirmación explícita | 5 |
 
 ---
 
@@ -121,7 +126,8 @@ publicar una tabla agregada que, por diseño, no tiene datos personales. Además
 (uno por scan) y el costo del plan gratuito.
 
 **Dónde se implementa.** `..._triggers_ocupacion.sql` + `alter publication` (Etapa 2); consumidor
-en `src/components/dashboard/ProveedorRealtime.tsx` (Etapa 5).
+en `src/components/ContadorOcupacion.tsx` (isla de cliente) y `src/lib/supabase/browser.ts`
+(cliente de navegador que abre el canal, ver S-42) (Etapa 5).
 
 **Tradeoff.** Se agrega un `UPDATE` a `ocupacion_actual` en cada scan y una tabla más que mantener
 consistente; se compensa con la reconciliación de S-13.
@@ -129,9 +135,10 @@ consistente; se compensa con la reconciliación de S-13.
 ### S-04 · Estadísticas públicas solo por funciones de agregados
 
 **Decisión.** El dashboard histórico no lee `sesiones` ni `eventos_scan`. Lee `snapshots_ocupacion`
-y `resumen_diario` (ya agregados, sin identidades) y llama funciones `SECURITY DEFINER` que
-devuelven únicamente números (permanencia promedio, conteos). Ninguna función pública devuelve
-`user_id`, email ni filas individuales.
+solo a través de funciones `SECURITY DEFINER` (`ocupacion_por_franja`, `ocupacion_hoy`,
+`permanencia_promedio`, `personas_distintas`) que devuelven únicamente números (promedios de
+ocupación, permanencia promedio, conteos). Ninguna función pública devuelve `user_id`, email ni
+filas individuales.
 
 **Amenaza.** Que el público (o un atacante con la `anon key`) reconstruya patrones de presencia
 —quién está, cuándo, cuánto tiempo— a partir de vistas aparentemente inocentes.
@@ -1236,14 +1243,22 @@ escaneable desde cualquier lugar. Mitigación prevista en la Etapa 6: que `requi
 `getUser()` —una llamada a Auth por render de `/qr` y por petición a `/api/qr/token`— para que la
 revocación surta efecto de inmediato en la ruta que emite tokens.
 
+---
+
+## Etapa 5 — Dashboard en tiempo real
+
 ### S-37 · Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI
 
 **Decisión.** El dashboard público es un Server Component: resuelve la zona y los agregados en el
 servidor con el cliente `anon` (sujeto a RLS) y no expone una ruta HTTP propia para estadísticas.
-La UI solo ofrece `7` y `30` días (toggle en el cliente con ambas series precalculadas), pero el
-contrato de lectura no se considera cerrado: `ocupacion_por_franja` valida 7/30 dentro de la RPC,
-mientras `permanencia_promedio` y `personas_distintas` siguen aceptando `p_desde`/`p_hasta` libres
-(1..90 días) y son ejecutables por `anon`, que es una clave pública. No se usa Upstash en lecturas.
+La UI solo ofrece `7` y `30` días mediante dos **enlaces `?rango=` renderizados en el servidor**
+(`RANGOS_DIAS` en `src/lib/validacion/dashboard.ts`): no hay toggle de cliente ni series
+precalculadas, sino una navegación que vuelve a renderizar el RSC con **una sola serie** del rango
+elegido (tarjetas y gráfico por hora) más las franjas de 30 días del mapa de calor, que se reutilizan
+de la misma promesa cuando `rango=30`. El contrato de lectura no se considera cerrado:
+`ocupacion_por_franja` valida 7/30 dentro de la RPC, mientras `permanencia_promedio` y
+`personas_distintas` siguen aceptando `p_desde`/`p_hasta` libres (1..90 días) y son ejecutables por
+`anon`, que es una clave pública. No se usa Upstash en lecturas.
 
 **Amenaza.** (1) Coste/abuso: un tercero puede llamar las RPC directamente y consumir CPU o
 interrogar rangos solapados para intentar el ataque por diferencia de S-23. (2) Disponibilidad:
@@ -1255,9 +1270,9 @@ dashboard son las más frecuentes y las consumirían primero.
 **Por qué esta solución.** El dato es público por diseño (ocupación de un espacio físico), ya está
 agregado y no contiene PII; la prioridad es que el dashboard se vea siempre, incluso en la demo y
 con la cuota gratuita. El coste se acota en la base (funciones con índice y salida ≤168 puntos) y
-con el render del RSC, no con un limitador que puede fallar. La decisión de producto del toggle
-7/30 (que se había numerado como S-41) no es una decisión de seguridad: se documenta aquí como
-contexto y no se registra aparte.
+con el render del RSC, no con un limitador que puede fallar. La decisión de producto del
+selector de rango 7/30 (que se había numerado como S-41) no es una decisión de seguridad: se
+documenta aquí como contexto y no se registra aparte.
 
 **Limitación conocida y mitigación futura.** Quien tenga la anon key puede llamar
 `permanencia_promedio`/`personas_distintas` con rangos libres; el k-anonimato (S-18/S-23) y el
@@ -1271,7 +1286,11 @@ tráfico lo justifica, un cubo de Upstash separado y **fail-open** para lecturas
 `src/app/dashboard/page.tsx` (Tanda 3).
 
 **Tradeoff.** La UI ofrece solo dos ventanas (menos flexibilidad para el informe), la limitación
-queda declarada en vez de resuelta y no hay rate limit por IP en lecturas.
+queda declarada en vez de resuelta y no hay rate limit por IP en lecturas. El costo real de una
+visita anónima con `rango=7` es de **hasta 7 consultas a Supabase** (zona, `ocupacion_actual`,
+franjas de 7 días, franjas de 30 días del mapa, `ocupacion_hoy`, permanencia y personas distintas);
+con `rango=30` son 6, porque la promesa de 30 días se reutiliza. Ninguna de esas consultas está
+limitada: quien visite o precargue la página en bucle las repite tantas veces como quiera.
 
 ### S-38 · Agregados en Postgres y solo agregados al navegador (tope de 1000 filas)
 
@@ -1279,8 +1298,10 @@ queda declarada en vez de resuelta y no hay rate limit por IP en lecturas.
 `ocupacion_hoy(zona)`: funciones `SECURITY DEFINER`, `search_path = public, pg_temp`, `STABLE`, que
 solo leen `snapshots_ocupacion` y devuelven agregados o la serie de conteos del día, sin
 identidades. `EXECUTE` se revoca de `PUBLIC` y se concede solo a `anon` y `authenticated`. La
-página no consulta `snapshots_ocupacion` directamente. Al navegador viajan como máximo 24 puntos
-(curva de hoy) y una matriz 7×24 (mapa de calor); las filas crudas nunca cruzan a un Client
+página no consulta `snapshots_ocupacion` directamente. Al navegador no viaja ninguna matriz: el mapa
+de calor se pinta como HTML en el servidor (S-40) y lo único que cruza a un Client Component son
+**como máximo 24 puntos por gráfico** (promedio por hora del día y curva de hoy, uno por hora del
+horario de la zona, con números ya redondeados). Las filas crudas nunca cruzan a un Client
 Component. Realtime sigue publicando solo `ocupacion_actual` (S-03).
 
 **Amenaza.** (1) Truncamiento silencioso: PostgREST limita cada respuesta a 1000 filas por defecto
@@ -1308,13 +1329,6 @@ con `has_function_privilege` el 2026-11-11); la migración 9 no lo modifica. La 
 usa para reconciliar `ocupacion_actual`; no es una exposición nueva, porque `service_role` nunca
 llega al navegador (S-07) y sigue sin estar disponible para `anon`/`authenticated`.
 
----
-
-## Etapa 5 — Dashboard en tiempo real (Tanda 2: gráficos y mapa de calor)
-
-> S-37 y S-38 (Tanda 1: agregados en Postgres y estadísticas por RSC) quedaron documentadas en la
-> sección de la Etapa 4 por continuidad del archivo; estas tres son de la Tanda 2.
-
 ### S-39 · Recharts como isla de cliente con `ssr: false`, sin relajar la CSP
 
 **Decisión.** Los dos gráficos (promedio por hora del día y curva de hoy) viven en
@@ -1330,12 +1344,17 @@ reabriría la inyección de CSS/atributos en toda la app. (2) Superficie de hidr
 menos HTML del servidor dependa de JavaScript de terceros para verse bien, menos formas hay de
 romper la página con un error de render.
 
-**Por qué esta solución.** Con `ssr: false` el SVG nunca viaja en el HTML: lo construye el propio
-JavaScript ya autorizado por el nonce, y la CSP no bloquea la manipulación del DOM desde
-JavaScript. Así no hay que debilitar ninguna directiva. `ssr: false` no está permitido dentro de
-un Server Component, y `EstadisticasDashboard` lo es (importa `server-only`); por eso el
-envoltorio de cliente separado. Como efecto secundario, Recharts sale del HTML inicial y la
-página pesa menos en el primer byte.
+**Por qué esta solución.** El nonce **no** es la razón por la que Recharts funciona: React aplica la
+prop `style` por CSSOM (`elemento.style.x = …`) y `style-src` no intercepta esa vía. Lo que la CSP sí
+bloquea es un atributo `style` dentro del HTML parseado y un `<style>` sin nonce; con `ssr: false` el
+SVG nunca viaja en el HTML, así que no hay ninguno de los dos y no hace falta debilitar ninguna
+directiva. `ssr: false` no está permitido dentro de un Server Component, y `EstadisticasDashboard` lo
+es (importa `server-only`); por eso el envoltorio de cliente separado. Como efecto secundario,
+Recharts sale del HTML inicial y la página pesa menos en el primer byte.
+
+**Verificado (2026-11-12, build de producción con datos, Firefox).** Sin errores de CSP en la
+consola; el único mensaje es un aviso sobre una cookie de Cloudflare de la conexión con Supabase
+(ruido de terceros, inofensivo y ajeno a la política).
 
 **Dónde se implementa.** `src/components/GraficosDashboard.tsx`,
 `src/components/GraficosDashboardCarga.tsx` y `src/app/dashboard/page.tsx` (Tanda 2 de la Etapa 5).
@@ -1359,11 +1378,21 @@ individuales. (3) XSS: cualquier color calculado en línea obligaría a `style=`
 CSP (S-39).
 
 **Por qué esta solución.** La matriz se calcula con `construirMatrizCalor`, que solo promedia
-ocupación (promedio ponderado por `muestras`), no personas: sigue el mismo criterio que S-18/S-23
-—los gráficos son promedios de ocupación y no dependen del k-anonimato de los datos individuales—.
-Al ser `<table>` semántica (con `caption` sr-only y `scope` en los encabezados) funciona sin
-JavaScript, con lector de pantalla y con contraste en tema claro y oscuro, y el HTML que sale del
-servidor no necesita ninguna excepción de CSP.
+ocupación (promedio ponderado por `muestras`), no personas: el k-anonimato de S-18/S-23 **no se
+aplica** aquí, porque esas reglas protegen a individuos (permanencia y personas distintas) y esta
+rejilla es un promedio de ocupación del espacio. Al ser `<table>` semántica (con `caption` sr-only y
+`scope` en los encabezados) funciona sin JavaScript, con lector de pantalla y con contraste en tema
+claro y oscuro, y el HTML que sale del servidor no necesita ninguna excepción de CSP.
+
+**Límite (las celdas no tienen k-anonimato).** Las celdas del mapa de calor y los puntos de los
+gráficos son promedios de ocupación **sin k-anonimato**: no hay umbral que oculte una celda. En un
+cowork pequeño una celda con 1–4 personas puede corresponder a una sola persona con horario fijo
+(por ejemplo, la única que entra todos los martes a las 09:00). Se acepta porque el contador en vivo
+ya es público por diseño (S-03), porque el dato es agregado a partir de snapshots de 5 min y porque
+no lleva identidad asociada. Debe quedar claro que el k-anonimato de S-18/S-23 se aplica **solo** a
+permanencia promedio y personas distintas, no a las celdas ni a los gráficos. Mitigación futura:
+ocultar («—») las celdas bajo un mínimo de personas o de muestras, no solo las que no tienen
+snapshots.
 
 **Dónde se implementa.** `src/components/MapaCalorDashboard.tsx` (recibe `filas`, `horas`,
 `aforoMax` y `horario`), `construirMatrizCalor`/`horasDelHorario` en
@@ -1385,17 +1414,125 @@ seguridad. (2) La tentación de "arreglarlo" añadiendo `'unsafe-eval'` a la CSP
 ejecutar cadenas como código y multiplicaría el impacto de cualquier XSS.
 
 **Por qué esta solución.** Zod sí llega al bundle de cliente: `src/lib/env.ts` valida los
-`NEXT_PUBLIC_*` con Zod y `src/lib/supabase/browser.ts` lo importa desde la isla del contador. Con
-`jitless` la validación es idéntica en resultado y solo algo más lenta (irrelevante para 4 variables
-de entorno). Ponerlo en `instrumentation-client.ts` —y no dentro de `env.ts`— garantiza que el
-ajuste se aplique antes de cualquier otro módulo y que nunca afecte al servidor, donde el JIT sí
+`NEXT_PUBLIC_*` con Zod y `src/lib/supabase/browser.ts` lo importa desde la isla del contador. Poner
+`z.config({ jitless: true })` en `instrumentation-client.ts` —y no dentro de `env.ts`— garantiza que
+el ajuste se aplique antes de cualquier otro módulo y que nunca afecte al servidor, donde el JIT sí
 conviene.
+
+**Verificado (2026-11-12).** El error de `unsafe-eval` desapareció de la consola del navegador. **No
+verificado:** que el resultado de las validaciones sea bit a bit idéntico con y sin `jitless`; lo
+único comprobado es que el dashboard carga y pinta datos sin errores en consola (lo que implica que
+`envPublico` se parseó bien). La equivalencia funcional es lo que documenta Zod, no algo que se haya
+medido aquí.
 
 **Dónde se implementa.** `src/instrumentation-client.ts`; CSP en `src/proxy.ts` (sin cambios).
 
 **Tradeoff.** Si en el futuro un Client Component usa Zod de forma intensiva (por ejemplo, validar
 un formulario grande), perderá el JIT también en el navegador; se acepta porque el rendimiento no es
-el cuello de botella y la alternativa era debilitar la CSP.
+el cuello de botella y la alternativa era debilitar la CSP. Además, `src/instrumentation-client.ts`
+importa Zod y se ejecuta en **todas** las páginas, incluidas las que no validan nada en el cliente:
+Zod viaja en el bundle de cada visita, no solo en la isla del contador.
+
+### S-42 · Cliente de navegador solo para Realtime: sin sesión y solo `ocupacion_actual`
+
+**Decisión.** El dashboard necesita un WebSocket, y para eso el navegador debe tener un cliente de
+Supabase; ese cliente es el mínimo posible (`src/lib/supabase/browser.ts`):
+
+- `createClient` con `persistSession: false`, `autoRefreshToken: false` y `detectSessionInUrl: false`:
+  **no hay sesión en el navegador**. El dashboard es público y anónimo, así que no se escribe nada en
+  cookies ni en `localStorage` ni se procesa la URL buscando tokens.
+- Solo la `anon key` (pública por definición); la `service_role` no existe en este bundle (S-07).
+- Se usa **solo** para Realtime, nunca para REST: el JSDoc del módulo prohíbe `.from()`/`.rpc()`
+  desde el navegador. Las lecturas pasan por Server Components (S-37/S-38) y las escrituras por RPC
+  o Route Handlers.
+- Una única tabla (`ocupacion_actual`) y solo `INSERT`/`UPDATE`, con `filter: zona_id=eq.<uuid>`. El
+  `zona_id` se valida como UUID **antes** de interpolarlo en el filtro, para que un valor de la URL
+  no pueda inyectar condiciones en la suscripción.
+- Cada evento se valida antes de pintarlo (`normalizarCambio`): la cantidad debe ser un entero ≥ 0;
+  si no, el contador conserva la última cifra buena y la UI no se rompe.
+- Topic de canal único por suscripción (`ocupacion_actual:<zona>:<n>`): `supabase.channel()` devuelve
+  el canal existente si el topic ya está en uso, y con el doble montaje de React Strict Mode eso
+  reengancharía el canal que se está cerrando. El sufijo solo evita esa colisión interna; lo que
+  limita los datos sigue siendo el `filter`.
+- Sin polling. Si el canal se cae, la UI lo dice («Reconectando…» / «Sin conexión en vivo: el valor
+  puede estar desactualizado») y al volver a `SUBSCRIBED` **después de un corte** se llama
+  `router.refresh()` para resincronizar con el RSC, porque durante el corte se pudieron perder
+  eventos; un `useRef` evita refrescar en el primer `SUBSCRIBED`.
+- Un solo cliente por pestaña y `removeChannel` en el cleanup: sin eso, cada navegación dejaría un
+  WebSocket abierto.
+
+**Amenaza.** (1) Que el cliente público se convierta en vía de lectura de datos personales: con la
+`anon key` y RLS mal puesta, un `.from("sesiones")` desde el navegador sería una fuga directa.
+(2) Que el dashboard anónimo arrastre una sesión de usuario (cookies, refresh token) que no necesita
+y que, ante un XSS, sirve para escribir asistencia. (3) Estado inconsistente por eventos inválidos,
+canales duplicados en desarrollo o eventos perdidos en una reconexión.
+
+**Por qué esta solución.** El navegador necesita la conexión, no los datos: se le da el mínimo
+privilegio posible —un canal, una tabla agregada, un filtro, sin sesión y sin REST— y la lectura de
+verdad queda en el servidor. Así, el peor caso de un abuso del cliente es recibir cambios de un
+contador que ya es público por diseño (S-03).
+
+**Dónde se implementa.** `src/lib/supabase/browser.ts` (`obtenerClienteNavegador`,
+`suscribirseOcupacionActual`, `normalizarCambio`) y `src/components/ContadorOcupacion.tsx`
+(`esCantidadValida`, estado de conexión, `router.refresh()`).
+
+**Tradeoff.** Cada reconexión (pestaña dormida, cambio de red, redeploy) dispara un
+`router.refresh()` que **repite todas las consultas del servidor** de la página —hasta 7, ver S-37—
+y no tiene freno ni retroceso exponencial: un cliente que pierda y recupere cobertura en bucle genera
+esa ráfaga cada vez.
+
+### S-43 · Script de simulación: local, fuera de `src/` y `service_role` solo desde el entorno
+
+**Decisión.** Los datos de demo se generan con `scripts/simular-ocupacion.ts`, ejecutado a mano en
+local (`node --env-file=.env.local scripts/simular-ocupacion.ts`). La app nunca lo importa.
+
+- Vive **fuera de `src/`**, así que no entra en el bundle de Next ni en el del navegador, y es
+  autónomo (`@supabase/supabase-js` y módulos `node:*`, sin alias `@/` ni `server-only`).
+- La `service_role` se lee **solo** de `process.env.SUPABASE_SERVICE_ROLE_KEY`, nunca se imprime ni
+  se registra, y el script aborta si existe `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY` (cualquier
+  variable `NEXT_PUBLIC_` termina en el bundle del navegador).
+- Antes de escribir nada muestra **solo el host** del proyecto y exige escribir `si` por teclado.
+- Usuarios `sim-NN@simulacion.invalid` (dominio reservado por RFC 2606, que no recibe correo) con
+  contraseña de `randomBytes(32)` y `ban_duration` de ~100 años: aunque alguien tuviera la
+  contraseña, **no puede iniciar sesión** con esas cuentas.
+- `--dry-run` calcula e imprime sin escribir ni crear usuarios; `--reemplazar` borra los snapshots
+  del rango y los reescribe; `--limpiar` borra los usuarios `sim-*` (sus sesiones caen por FK) y
+  recalcula los snapshots con lo que queda. Si el período ya tiene snapshots y no se pidió
+  `--reemplazar`/`--limpiar`, aborta **antes** de pedir confirmación.
+- La demo se etiqueta en la UI: con `NEXT_PUBLIC_DATOS_DEMO=true`, el dashboard muestra la franja
+  «Datos de demostración: parte de las cifras proviene de una simulación».
+
+**Amenaza.** (1) Que una clave con privilegios totales acabe en el bundle del navegador por un
+`NEXT_PUBLIC_` o por un import desde `src/`. (2) Que una corrida accidental —o contra el proyecto
+equivocado— destruya datos reales. (3) Que las cuentas de prueba sean una puerta de entrada a
+producción. (4) Que las cifras simuladas se confundan con uso real en la demo o en el informe.
+
+**Por qué esta solución.** El riesgo no está en simular, sino en **cómo** se conecta el script y en
+quién puede entrar con las cuentas que crea: por eso la credencial no viaja con el código, el destino
+se confirma a mano y las cuentas nacen baneadas. El etiquetado en la UI cierra la ambigüedad del
+dato.
+
+**Hallazgo (ya corregido).** La primera versión derivaba las contraseñas de un PRNG **con semilla
+fija**; como el repositorio es público, cualquiera podía recalcularlas y quedaban credenciales
+predecibles. Se corrigió con `randomBytes` (CSPRNG del sistema, sin semilla); el motivo queda escrito
+en el JSDoc del propio script.
+
+**Dónde se implementa.** `scripts/simular-ocupacion.ts`; el etiquetado en `src/lib/env.ts`
+(`datosDemoActivos`) y `src/app/dashboard/page.tsx`.
+
+**Tradeoff.** La simulación escribe `sesiones` y `snapshots_ocupacion` (y reconcilia
+`ocupacion_actual` con `refrescar_ocupacion`), pero **no** rellena `eventos_scan` ni
+`resumen_diario`: lo que dependa de esas tablas queda vacío en la demo. Además, `--limpiar` borra
+usuarios de Auth de verdad, así que en un proyecto compartido hay que leer el host confirmado antes
+de escribir `si`.
+
+### Limitaciones conocidas de la Etapa 5
+
+| # | Limitación | Estado y mitigación futura |
+| --- | --- | --- |
+| 1 | Una **caída de Supabase se ve como 404**: `obtenerZonaPorSlug` devuelve `null` tanto si la zona no existe como si la consulta falla, y la página llama a `notFound()`. | Verificado leyendo `src/lib/supabase/zonas.ts` y `src/app/dashboard/page.tsx` (no reproducido con Supabase caído). Mitigación futura: distinguir «error» de «no existe» |
+| 2 | **Sin rate limit en las lecturas** del dashboard (hasta 7 consultas por visita, S-37), ni por IP ni por usuario. | Decidido a propósito en S-37; mitigación futura: cubo separado **fail-open** para lecturas |
+| 3 | El `router.refresh()` de la reconexión de Realtime **no tiene freno** (S-42): cada reconexión repite las consultas del servidor. | Sin medir en producción; mitigación futura: retroceso exponencial o debounce |
 
 ---
 
@@ -1412,6 +1549,10 @@ el cuello de botella y la alternativa era debilitar la CSP.
 | Vector HMAC `fd5034f9…bdef` como test de Vitest (S-16 · S-26) | 6 |
 | Test de contrato entre `RESULTADOS_SCAN` y el enum `resultado_scan` (S-33) | 6 |
 | Ventana fija o revocación de `EXECUTE` a `anon` para `permanencia_promedio`/`personas_distintas` (S-37, limitación conocida) | 6 |
+
+> Revisado al cerrar la Etapa 5 (2026-11-12): **ninguna de las filas anteriores está resuelta
+> todavía**. `tests/unit` y `tests/rls` están vacíos, no existe ninguna ruta `/admin` y
+> `requireAdmin()` sigue apoyándose en `getClaims()`. Por eso no se elimina ninguna fila.
 
 ## Control de cambios
 
@@ -1433,4 +1574,5 @@ el cuello de botella y la alternativa era debilitar la CSP.
 | 2026-11-11 | Etapa 5 (Tanda 1): agregados del dashboard en Postgres y solo agregados al navegador, por el tope de 1000 filas de PostgREST (S-38); estadísticas por RSC sin Upstash, con rangos cerrados solo en la UI y la limitación de las RPC de rango libre declarada (S-37). Se corrige S-23 para no atribuirse una mitigación que no se implementó y la decisión de UI del toggle 7/30 se funde en S-37 |
 | 2026-11-11 | Verificación DST de `tiempo.ts` contra un Postgres 18 temporal (`America/Santiago`): los mediodías locales de `2026-09-06` y `2026-04-05` y sus ventanas de 7 días coinciden al milisegundo con `date_trunc('day', … at time zone …) at time zone …` y con el redondeo a medianoche de la migración 9. También se probó la migración 9 en ese Postgres: `p_dias=5` → 0 filas, `p_dias=30` ≤168, `ocupacion_hoy` solo el día local, `anon`/`authenticated` con EXECUTE, `PUBLIC` sin él; `service_role` con EXECUTE en `refrescar_ocupacion`, confirmado también en Supabase el 2026-11-11 |
 | 2026-11-12 | Etapa 5 (Tanda 2): Recharts como isla de cliente con `ssr: false` para no relajar la CSP (S-39), mapa de calor día × hora renderizado en el servidor como tabla HTML con datos agregados (S-40) y `z.config({ jitless: true })` en `src/instrumentation-client.ts` para que Zod no use `new Function` (S-41). Se cablean `aforoMax`, `hora_apertura` y `hora_cierre` de la zona en `EstadisticasDashboard` y se añaden `construirPuntosPorHora`, `construirPuntosHoy` y `horasDelHorario` en `src/lib/dominio/estadisticas.ts` |
+| 2026-11-12 | Etapa 5 (Tandas 3, 4a y 4b + correcciones de este paso): isla de Realtime con un cliente de navegador sin sesión, solo `ocupacion_actual` filtrada por zona, eventos validados y `router.refresh()` tras una reconexión (S-42); script de simulación local con `service_role` leída del entorno, confirmación escribiendo el host, cuentas `sim-*` baneadas y `--dry-run`/`--reemplazar`/`--limpiar` (S-43, con el hallazgo corregido de las contraseñas derivadas de un PRNG con semilla fija). Se corrigen afirmaciones que no coincidían con el código: S-37 (el selector 7/30 son enlaces `?rango=` renderizados en el servidor, con una sola serie del rango más las franjas de 30 días del mapa, y el costo real de hasta 7 consultas por visita anónima sin rate limit), S-38 (el mapa de calor no viaja al navegador: es HTML del servidor; al cliente solo llegan ≤24 puntos por gráfico), S-39 (el nonce no es la razón: React aplica `style` por CSSOM; verificado sin errores de CSP en build de producción con datos el 2026-11-12), S-40 (límite explícito: las celdas no tienen k-anonimato; el k=5 de S-18/S-23 aplica solo a permanencia y personas distintas), S-41 (verificado que desaparece el error de `unsafe-eval`; se añade que Zod pesa en todas las páginas) y S-03/S-04 (consumidores reales y RPC que usa el dashboard). S-37 y S-38 se mueven a la sección de la Etapa 5 y se declaran las limitaciones conocidas (una caída de Supabase se ve como 404, lecturas sin rate limit, `router.refresh()` sin freno) |
 
