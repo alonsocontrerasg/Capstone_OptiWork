@@ -200,12 +200,19 @@ sin dejar fila) y `rate_limited` lo genera el **borde** cuando Upstash niega el 
 
 ### 5.3 Dashboard público (`/dashboard`)
 
-1. El RSC resuelve `?zona=<slug>` (o `NEXT_PUBLIC_ZONA_POR_DEFECTO`) y entrega en el primer
-   render la ocupación, la configuración de la zona y los agregados del rango (7/30 días).
-2. Un Client Component se suscribe a `postgres_changes` sobre `ocupacion_actual` filtrado por
-   `zona_id`; al recibir un `UPDATE` actualiza contador, barra y semáforo sin recargar.
-3. Recharts pinta gráfico por hora, mapa de calor día × hora, hora punta y permanencia promedio.
-   Si Realtime se cae, la página conserva el dato inicial y reintenta con backoff.
+1. `src/app/dashboard/page.tsx` es un Server Component (`force-dynamic`): resuelve `?zona=<slug>`
+   (o `NEXT_PUBLIC_ZONA_POR_DEFECTO`) y desde `src/lib/supabase/dashboard.ts` lee
+   `ocupacion_actual` (tabla, acotada por RLS) y llama a las RPC `ocupacion_por_franja`,
+   `ocupacion_hoy`, `permanencia_promedio` y `personas_distintas`; el agregado se calcula en la
+   base y el HTML llega ya pintado.
+2. La única isla de cliente con Realtime es `ContadorOcupacion`: se suscribe a `postgres_changes`
+   sobre `ocupacion_actual` filtrado por `zona_id` y actualiza contador, barra y semáforo sin
+   recargar. Si el canal se cae, el cliente de Supabase se reconecta solo y el contador muestra el
+   estado («Reconectando…» o «Sin conexión en vivo»); tras un corte, al volver a `SUBSCRIBED` se
+   pide `router.refresh()` para recuperar el dato actual del RSC (no hay backoff propio).
+3. Los gráficos van aparte: `GraficosDashboardCarga` importa `GraficosDashboard` con
+   `next/dynamic` y `ssr: false`, así Recharts no entra al HTML del servidor y solo recibe arrays
+   agregados y pequeños (`{ etiqueta, promedio, muestras }`, `{ etiqueta, cantidad }`).
 
 ### 5.4 Admin (`/admin`)
 
@@ -326,9 +333,8 @@ de verdad.
 7. **Registro de aplicación**: en `docs/modelo-datos.md` (Etapa 2) se anota qué migración se
    aplicó y cuándo, para poder comparar repositorio vs. base de datos antes de una demo.
 8. **Semilla**: `supabase/seed.sql` crea la zona `hub-providencia` y nada más. La simulación de
-   datos es un script aparte (Etapa 6) que **también** rellena `snapshots_ocupacion` y
-   `resumen_diario`, no solo `sesiones`, para que el dashboard tenga histórico coherente desde
-   el primer arranque.
+   datos es un script aparte (`scripts/simular-ocupacion.ts`, Etapa 5) que genera sesiones
+   cerradas y `snapshots_ocupacion`; **no** escribe `eventos_scan` ni `resumen_diario`.
 
 ## 9. Variables de entorno
 
@@ -344,6 +350,7 @@ por git.
 | `QR_TOKEN_SECRET` | **Secreta, solo servidor** | Firma HMAC de los tokens de QR y clave de los hashes de IP y correo del rate limit: **exactamente 64 hex** (`openssl rand -hex 32` = 256 bits). La clave es el **texto** del secreto (64 bytes UTF-8), no los 32 bytes decodificados, y es el mismo valor que `app_secrets.qr_token_secret` |
 | `QR_WINDOW_SECONDS` | Config | Duración de la ventana del QR (45 por defecto); debe coincidir con `app_secrets.qr_window_seconds` |
 | `NEXT_PUBLIC_ZONA_POR_DEFECTO` | Pública | Slug usado cuando la URL no trae `?zona=` |
+| `NEXT_PUBLIC_DATOS_DEMO` | Pública, **opcional** | `"true"`/`"false"`; cualquier otro valor (o su ausencia) se interpreta como `false`. En `"true"` el dashboard rotula la franja «Datos de demostración». Solo debe activarse después de correr `scripts/simular-ocupacion.ts` |
 | `UPSTASH_REDIS_REST_URL` / `…_TOKEN` | **Secretas** | Rate limiting (Etapa 4) en `/api/scan` y `/auth/login`; opcionales en local (contador en memoria), **obligatorias en producción** (sin ellas esas dos rutas fallan cerradas con 500) |
 
 Reglas: ninguna variable secreta lleva prefijo `NEXT_PUBLIC_` (Next las incrusta en el bundle del
@@ -375,10 +382,11 @@ OptiWork/
 │  ├─ verificacion.sql                # Etapa 2: chequeos RLS/jobs/publicación
 │  └─ seed.sql                        # Etapa 2: zona hub-providencia
 ├─ scripts/
-│  ├─ simular-datos.ts                # Etapa 6: entradas/salidas + snapshots + resumen_diario
+│  ├─ simular-ocupacion.ts            # Etapa 5: demo local (auth.users sim-*, sesiones, snapshots)
 │  └─ generar-tipos.sh                # tipos TS desde el esquema
 ├─ src/
 │  ├─ proxy.ts                        # Etapa 3: refresh de sesión + CSP/HSTS
+│  ├─ instrumentation-client.ts       # Etapa 5: zod jitless (la CSP no permite unsafe-eval)
 │  ├─ app/
 │  │  ├─ layout.tsx  page.tsx  globals.css  error.tsx  not-found.tsx  forbidden.tsx
 │  │  ├─ login/page.tsx               # Etapa 3
@@ -386,8 +394,8 @@ OptiWork/
 │  │  ├─ auth/callback/route.ts       # Etapa 3: magic link → cookies
 │  │  ├─ auth/signout/route.ts        # Etapa 3
 │  │  ├─ scan/page.tsx                # Etapa 4
-│  │  ├─ dashboard/page.tsx           # Etapa 5
-│  │  ├─ dashboard/loading.tsx        # Etapa 5
+│  │  ├─ dashboard/page.tsx           # Etapa 5: RSC con las RPC del dashboard
+│  │  ├─ dashboard/error.tsx          # Etapa 5: borde de error de la ruta
 │  │  ├─ qr/page.tsx                  # Etapa 3 (admin): QR de entrada y salida
 │  │  ├─ admin/layout.tsx             # Etapa 6: guard de rol
 │  │  ├─ admin/page.tsx               # Etapa 6: configuración de zonas
@@ -399,10 +407,13 @@ OptiWork/
 │  │     ├─ admin/zonas/route.ts      # Etapa 6: PATCH
 │  │     └─ admin/export/route.ts     # Etapa 6: GET CSV
 │  ├─ components/
-│  │  ├─ ui/                          # Card, Button, Badge, Skeleton, EmptyState
-│  │  ├─ dashboard/                   # ContadorOcupacion, BarraAforo, Semaforo,
-│  │  │                               # GraficoPorHora, MapaCalor, ResumenStats,
-│  │  │                               # SelectorZona, ProveedorRealtime
+│  │  ├─ ContadorOcupacion.tsx        # Etapa 5: isla Realtime sobre ocupacion_actual
+│  │  ├─ BarraAforo.tsx               # Etapa 5: barra de % de aforo
+│  │  ├─ SemaforoOcupacion.tsx        # Etapa 5: Bajo / Moderado / Lleno
+│  │  ├─ EstadisticasDashboard.tsx    # Etapa 5: hora punta y permanencia (RSC)
+│  │  ├─ MapaCalorDashboard.tsx       # Etapa 5: mapa de calor día × hora
+│  │  ├─ GraficosDashboard.tsx        # Etapa 5: gráficos Recharts (cliente)
+│  │  ├─ GraficosDashboardCarga.tsx   # Etapa 5: next/dynamic + ssr:false
 │  │  ├─ scan/ConfirmacionScan.tsx
 │  │  ├─ admin/                       # FormularioZona, TablaHistorial, BotonExportCSV
 │  │  ├─ qr/QrRotativo.tsx            # Etapa 3: QR que se renueva solo
@@ -412,13 +423,18 @@ OptiWork/
 │  │  ├─ supabase/cookies.ts          # opciones de cookie httpOnly/secure (S-09)
 │  │  ├─ supabase/admin.ts            # service_role (server-only)
 │  │  ├─ supabase/zonas.ts            # lectura de zonas (RLS)
+│  │  ├─ supabase/dashboard.ts        # Etapa 5: RPCs del dashboard (RSC)
+│  │  ├─ supabase/browser.ts          # Etapa 5: cliente de navegador + canal Realtime
 │  │  ├─ auth/session.ts guards.ts redirects.ts acciones.ts  # getClaims, guards, anti open-redirect, login en servidor
 │  │  ├─ qr/token.ts                  # formato + firma HMAC (puro, testeable)
 │  │  ├─ qr/imagen.ts                 # SVG del QR (servidor)
 │  │  ├─ dominio/ocupacion.ts         # calcularEstado + porcentaje (puro, testeado)
+│  │  ├─ dominio/estadisticas.ts      # Etapa 5: series, mapa de calor y agregados (puro)
+│  │  ├─ dominio/tiempo.ts            # Etapa 5: hora local, rangos y formato (puro)
 │  │  ├─ dominio/horarios.ts          # apertura/cierre por zona y timezone
 │  │  ├─ dominio/consentimiento.ts    # versión vigente del aviso
 │  │  ├─ dominio/auth.ts              # mínimo de contraseña (compartido con el formulario)
+│  │  ├─ validacion/dashboard.ts      # Etapa 5: zod de ?zona y ?rango
 │  │  ├─ validacion/qr.ts consentimiento.ts scan.ts zona.ts auth.ts # esquemas zod de entrada
 │  │  ├─ http/origen.ts               # comprobación de mismo origen (CSRF)
 │  │  ├─ env.ts  env.server.ts        # validación zod de variables de entorno
@@ -447,6 +463,7 @@ Criterios de organización:
 - **Un solo lugar por responsabilidad**: token QR en `lib/qr`, sesión en `lib/auth`, esquemas zod
   en `lib/validacion`. Ningún componente arma un token o valida un body a mano.
 - **Tests fuera de `src`**: se ejecutan contra el código público, no contra internals.
+- **`/dashboard` ya no tiene `loading.tsx`**: se eliminó para conservar el 404 real cuando la zona no existe (`notFound()` se llama antes de cualquier `<Suspense>`).
 
 ## 11. Escalabilidad: del Hub a otros espacios
 
@@ -540,7 +557,7 @@ formato, para que el informe final se arme por acumulación.
 | Cierre automático por horario en feriados | Sesiones cerradas antes de tiempo | La fecha se evalúa en `America/Santiago`; el usuario puede volver a marcar entrada; el histórico no se corrompe |
 | Deriva del contador por fallos a mitad de transacción | Dashboard con cifra incorrecta | Trigger transaccional + reconciliación por `COUNT` cada 5 min (`I6`, `S-13`) |
 | Recharts en Client Components aumenta el JS del dashboard | Carga más lenta en 3G | Carga diferida del bloque de gráficos con `dynamic`/lazy y datos ya agregados desde el servidor |
-| Realtime no disponible (red del cowork) | Contador congelado | Dato inicial del RSC + reintento con backoff + botón de recarga manual |
+| Realtime no disponible (red del cowork) | Contador congelado | Dato inicial del RSC + indicador de conexión («Reconectando…» / «Sin conexión en vivo») + `router.refresh()` al reconectar |
 
 ---
 

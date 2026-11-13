@@ -317,6 +317,13 @@ function GraficoBarras({
   puntos: PuntoPromedioHora[];
   dias: number;
 }) {
+  /**
+   * Ticks del eje X uniformes: una etiqueta cada 2 barras si el horario tiene ≤12 horas y una
+   * cada 3 cuando tiene más. Con `interval="preserveStartEnd"` Recharts decidía según el ancho
+   * disponible y se saltaba horas de forma despareja (p. ej. 18:00 sí, 17:00 no).
+   */
+  const intervaloEtiquetas = puntos.length <= 12 ? 1 : 2;
+
   return (
     <>
       <div
@@ -340,7 +347,7 @@ function GraficoBarras({
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={{ stroke: "currentColor", strokeOpacity: 0.3 }}
-              interval="preserveStartEnd"
+              interval={intervaloEtiquetas}
             />
             <YAxis
               // Ancho reservado para que "100" o "62,5" se vean completos; sin margen negativo
@@ -405,7 +412,10 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
           <AreaChart
             data={puntos}
             accessibilityLayer={false}
-            margin={{ top: 8, right: 8, bottom: 0, left: -8 }}
+            // `right: 20` reserva el ancho de media etiqueta ("19:00"): con 8 el último tick
+            // quedaba centrado sobre el borde del área de dibujo y el SVG recortaba su último
+            // carácter ("19:0"). No es el formateador: `etiqueta` ya llega como "HH:00".
+            margin={{ top: 8, right: 20, bottom: 0, left: -8 }}
           >
             <defs>
               <linearGradient id="relleno-hoy" x1="0" y1="0" x2="0" y2="1">

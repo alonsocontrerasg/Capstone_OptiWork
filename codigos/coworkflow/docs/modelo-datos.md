@@ -384,6 +384,22 @@ Rutas que expone la app en esta etapa: `/login`, `/auth/callback`, `/auth/signou
 ### 4. Verificar
 Ejecuta `supabase/verificacion.sql`. Debe terminar con `NOTICE: Verificación OK ...`.
 
+## Simulación de datos (demo local)
+
+`scripts/simular-ocupacion.ts` se ejecuta a mano, fuera de Next y con la `service_role`:
+
+- crea filas en `auth.users` con correos `sim-NN@simulacion.invalid` (el trigger
+  `on_auth_user_created` crea su fila en `profiles`);
+- inserta sesiones **cerradas** en `sesiones` para 30 días civiles completos que terminan en la
+  medianoche local de hoy;
+- recalcula `snapshots_ocupacion` cada 5 min y deja `ocupacion_actual` coherente con
+  `refrescar_ocupacion(zona)`.
+
+**No** llena `eventos_scan` ni `resumen_diario`: la auditoría de escaneos solo la escribe la RPC
+`registrar_scan` y los agregados diarios, el job de pg_cron `coworkflow_resumen_diario` (función
+`cron_resumen_diario()`, 05:10 UTC). Por eso el dashboard nunca depende de esas dos tablas para las
+cifras de la demo.
+
 ## Escalabilidad a otras zonas
 
 El esquema ya es multi-zona: `zonas` tiene su propio `aforo_max`, umbrales, horario, timezone
