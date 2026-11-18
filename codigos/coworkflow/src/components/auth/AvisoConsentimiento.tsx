@@ -1,18 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Clock, ShieldCheck, Trash2, Users, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 
-import type { SeccionAviso } from "@/lib/dominio/consentimiento";
+import { RESUMEN_AVISO } from "@/lib/dominio/consentimiento";
 
 type Props = {
   version: number;
   fecha: string;
-  secciones: readonly SeccionAviso[];
   /** Fecha ISO de una aceptación previa (para mostrar o para avisar de una versión nueva). */
   aceptadoAt: string | null;
   requiereAceptacion: boolean;
 };
+
+/** Íconos de los tres puntos resumen, en el mismo orden que `RESUMEN_AVISO`. */
+const ICONOS_RESUMEN: readonly LucideIcon[] = [Clock, Users, Trash2];
 
 /**
  * Aviso de consentimiento (Ley 21.719).
@@ -24,7 +28,6 @@ type Props = {
 export function AvisoConsentimiento({
   version,
   fecha,
-  secciones,
   aceptadoAt,
   requiereAceptacion,
 }: Props) {
@@ -63,38 +66,48 @@ export function AvisoConsentimiento({
   }
 
   return (
-    <div className="rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
-      <h2 className="text-lg font-semibold">Aviso de privacidad</h2>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+    <div className="tarjeta">
+      <h2 className="text-lg font-semibold">
+        {actualizacion ? "Actualizamos el aviso" : "Antes de empezar"}
+      </h2>
+      <p className="mt-1 text-xs text-tenue">
         Versión {version} · {fecha}
       </p>
 
       {actualizacion && (
-        <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <p className="mt-4 rounded-xl bg-moderado-fondo px-4 py-3 text-sm text-moderado-texto">
           Actualizamos el aviso. Acepta la versión {version} para seguir marcando tu
           asistencia.
         </p>
       )}
 
-      <dl className="mt-5 space-y-4">
-        {secciones.map((seccion) => (
-          <div key={seccion.titulo}>
-            <dt className="text-sm font-medium">{seccion.titulo}</dt>
-            <dd className="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              {seccion.texto}
-            </dd>
-          </div>
-        ))}
-      </dl>
+      <ul className="mt-5 space-y-3">
+        {RESUMEN_AVISO.map((texto, indice) => {
+          const Icono = ICONOS_RESUMEN[indice] ?? ShieldCheck;
+          return (
+            <li key={texto} className="flex items-start gap-3 text-sm leading-6">
+              <Icono aria-hidden className="mt-0.5 size-5 shrink-0 text-marca" />
+              <span>{texto}</span>
+            </li>
+          );
+        })}
+      </ul>
+
+      <Link
+        href="/privacidad"
+        className="foco-marca mt-4 inline-flex min-h-11 items-center text-sm font-medium text-marca underline underline-offset-4"
+      >
+        Leer el aviso completo
+      </Link>
 
       {requiereAceptacion ? (
-        <div className="mt-6 border-t border-zinc-200 pt-5 dark:border-zinc-800">
+        <div className="mt-6 border-t border-borde pt-5">
           <label className="flex items-start gap-3 text-sm leading-6">
             <input
               type="checkbox"
               checked={marcado}
               onChange={(evento) => setMarcado(evento.target.checked)}
-              className="mt-1 size-4 shrink-0 rounded border-zinc-400"
+              className="mt-1 size-4 shrink-0 rounded border-borde accent-marca"
             />
             <span>
               He leído el aviso y acepto que se registren mis horas de entrada y salida con
@@ -102,8 +115,8 @@ export function AvisoConsentimiento({
             </span>
           </label>
 
-          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-            Si no aceptas, no podrás marcar entrada ni salida. El dashboard público sigue
+          <p className="mt-3 text-xs text-tenue">
+            Si no aceptas, no podrás marcar entrada ni salida. El panel público sigue
             disponible sin aceptar nada.
           </p>
 
@@ -111,17 +124,17 @@ export function AvisoConsentimiento({
             type="button"
             onClick={aceptar}
             disabled={!marcado || enviando}
-            className="mt-4 rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="btn-primario mt-4 w-full disabled:cursor-not-allowed disabled:opacity-40"
           >
             {enviando ? "Registrando…" : "Acepto y continúo"}
           </button>
 
-          <p aria-live="polite" className="mt-3 text-sm text-red-600 dark:text-red-400">
+          <p aria-live="polite" className="mt-3 text-sm text-lleno-texto">
             {error}
           </p>
         </div>
       ) : (
-        <p className="mt-5 text-sm text-emerald-700 dark:text-emerald-400">
+        <p className="mt-5 text-sm text-bajo-texto">
           Consentimiento vigente (versión {version}).
         </p>
       )}

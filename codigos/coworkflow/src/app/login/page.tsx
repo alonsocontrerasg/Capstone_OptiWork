@@ -42,22 +42,42 @@ export default async function PaginaLogin({ searchParams }: Props) {
     typeof params.error === "string" ? params.error : null,
   );
 
+  const titulo = modoScan ? `Ingresa para marcar tu ${modoScan}` : "Ingresar";
+
   return (
     <div className="flex flex-1 flex-col">
       <main className="mx-auto w-full max-w-md flex-1 px-5 py-10 md:px-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Iniciar sesión</h1>
-        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Entra para marcar tu entrada y salida. Si es tu primera vez, en la portada verás el
-          aviso de privacidad y podrás aceptarlo.
-        </p>
+        <div className="flex items-center justify-center gap-2.5">
+          <span
+            aria-hidden
+            className="grid size-10 place-items-center rounded-xl bg-marca text-xs font-semibold text-white"
+          >
+            OW
+          </span>
+          <span className="text-lg font-semibold tracking-tight">OptiWork</span>
+        </div>
 
         {modoScan && (
-          <p
-            role="status"
-            className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-          >
-            Paso 1 de 2: inicia sesión o crea tu cuenta. Después vuelve a escanear el QR de{" "}
-            {modoScan === "entrada" ? "entrada" : "salida"}.
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <span aria-hidden className="flex gap-1">
+              <span className="h-1.5 w-6 rounded-full bg-marca" />
+              <span className="h-1.5 w-6 rounded-full bg-borde" />
+            </span>
+            <span className="text-xs font-medium text-tenue">Paso 1 de 2</span>
+          </div>
+        )}
+
+        <h1
+          className={`text-center text-2xl font-semibold tracking-tight ${
+            modoScan ? "mt-4" : "mt-10"
+          }`}
+        >
+          {titulo}
+        </h1>
+
+        {modoScan && (
+          <p className="mt-2 text-center text-sm leading-6 text-tenue">
+            Después vuelve a escanear el QR.
           </p>
         )}
 

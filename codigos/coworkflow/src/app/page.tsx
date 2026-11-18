@@ -1,11 +1,11 @@
 import Link from "next/link";
+import { QrCode } from "lucide-react";
 
 import { AvisoConsentimiento } from "@/components/auth/AvisoConsentimiento";
 import { obtenerSesion } from "@/lib/auth/session";
 import {
   CONSENTIMIENTO_FECHA,
   CONSENTIMIENTO_VERSION,
-  SECCIONES_AVISO,
   consentimientoDesactualizado,
   tieneConsentimiento,
 } from "@/lib/dominio/consentimiento";
@@ -63,11 +63,10 @@ export default async function Home({ searchParams }: Props) {
         )}
 
         {sesion && !conConsentimiento && (
-          <section className="mt-8">
+          <section className="mx-auto mt-8 max-w-md">
             <AvisoConsentimiento
               version={CONSENTIMIENTO_VERSION}
               fecha={CONSENTIMIENTO_FECHA}
-              secciones={SECCIONES_AVISO}
               aceptadoAt={null}
               requiereAceptacion
             />
@@ -75,15 +74,31 @@ export default async function Home({ searchParams }: Props) {
         )}
 
         {sesion && conConsentimiento && (
-          <section className="mt-8 space-y-4">
+          <section className="mx-auto mt-8 max-w-md space-y-4">
             {!desactualizado && modoScan && (
-              <div
-                role="status"
-                className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm leading-6 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200"
-              >
-                ¡Listo! Último paso: escanea de nuevo el QR de{" "}
-                <strong>{modoScan === "entrada" ? "entrada" : "salida"}</strong> para
-                marcar tu asistencia.
+              <div role="status" className="rounded-3xl bg-marca p-6 text-white">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/80">
+                    Último paso
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span aria-hidden className="flex gap-1">
+                      <span className="h-1.5 w-6 rounded-full bg-white" />
+                      <span className="h-1.5 w-6 rounded-full bg-white" />
+                    </span>
+                    <span className="text-xs font-medium text-white/80">Paso 2 de 2</span>
+                  </span>
+                </div>
+
+                <QrCode aria-hidden className="mt-5 size-16" />
+                <h2 className="mt-4 text-xl font-semibold tracking-tight">
+                  Escanea de nuevo el QR de{" "}
+                  {modoScan === "entrada" ? "ENTRADA" : "SALIDA"}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-white/90">
+                  Está en la pantalla del acceso.
+                </p>
+                <p className="mt-4 text-xs text-white/80">Solo la primera vez.</p>
               </div>
             )}
             <div className="rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
@@ -120,7 +135,6 @@ export default async function Home({ searchParams }: Props) {
               <AvisoConsentimiento
                 version={CONSENTIMIENTO_VERSION}
                 fecha={CONSENTIMIENTO_FECHA}
-                secciones={SECCIONES_AVISO}
                 aceptadoAt={sesion.perfil?.consentimiento_at ?? null}
                 requiereAceptacion
               />

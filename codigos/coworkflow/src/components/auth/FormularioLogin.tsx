@@ -83,12 +83,19 @@ async function leerRespuesta(respuesta: Response): Promise<RespuestaAuth | null>
 
 export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
   const router = useRouter();
-  const [modo, setModo] = useState<Modo>("enlace");
+  const [modo, setModo] = useState<Modo>("contrasena");
   const [correo, setCorreo] = useState("");
   const [contrasena, setContrasena] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(mensajeInicial);
   const [aviso, setAviso] = useState<string | null>(null);
+
+  /** Cambia la forma de acceso y limpia los mensajes de la anterior. */
+  function cambiarModo(nuevo: Modo) {
+    setModo(nuevo);
+    setError(null);
+    setAviso(null);
+  }
 
   async function manejarEnvio(evento: React.FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -143,41 +150,8 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
         : "Crear cuenta";
 
   return (
-    <div className="rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
-      <div
-        role="tablist"
-        aria-label="Forma de acceso"
-        className="flex flex-wrap gap-2 text-sm"
-      >
-        {(
-          [
-            ["enlace", "Enlace mágico"],
-            ["contrasena", "Contraseña"],
-            ["registro", "Crear cuenta"],
-          ] as const
-        ).map(([valor, etiqueta]) => (
-          <button
-            key={valor}
-            type="button"
-            role="tab"
-            aria-selected={modo === valor}
-            onClick={() => {
-              setModo(valor);
-              setError(null);
-              setAviso(null);
-            }}
-            className={`rounded-full px-4 py-1.5 font-medium transition-colors ${
-              modo === valor
-                ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            }`}
-          >
-            {etiqueta}
-          </button>
-        ))}
-      </div>
-
-      <form onSubmit={manejarEnvio} className="mt-6 space-y-4">
+    <div className="tarjeta">
+      <form onSubmit={manejarEnvio} className="space-y-4">
         <div>
           <label htmlFor="correo" className="text-sm font-medium">
             Correo
@@ -190,7 +164,7 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
             inputMode="email"
             value={correo}
             onChange={(evento) => setCorreo(evento.target.value)}
-            className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100"
+            className="foco-marca mt-1.5 h-12 w-full rounded-xl border border-borde bg-superficie px-3 text-sm text-tinta placeholder:text-tenue/60 focus:border-marca"
             placeholder="tu@correo.cl"
           />
         </div>
@@ -208,7 +182,7 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
               autoComplete={modo === "registro" ? "new-password" : "current-password"}
               value={contrasena}
               onChange={(evento) => setContrasena(evento.target.value)}
-              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:border-zinc-100"
+              className="foco-marca mt-1.5 h-12 w-full rounded-xl border border-borde bg-superficie px-3 text-sm text-tinta placeholder:text-tenue/60 focus:border-marca"
               placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres`}
             />
           </div>
@@ -217,22 +191,60 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
         <button
           type="submit"
           disabled={enviando}
-          className="w-full rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="btn-primario h-12 w-full disabled:cursor-not-allowed disabled:opacity-40"
         >
           {enviando ? "Enviando…" : tituloBoton}
         </button>
       </form>
 
-      <p aria-live="polite" className="mt-4 text-sm text-red-600 dark:text-red-400">
+      <p aria-live="polite" className="mt-4 text-sm text-lleno-texto">
         {error}
       </p>
-      <p aria-live="polite" className="mt-2 text-sm text-emerald-700 dark:text-emerald-400">
+      <p aria-live="polite" className="mt-2 text-sm text-bajo-texto">
         {aviso}
       </p>
 
-      <p className="mt-6 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-        El enlace mágico es la vía principal; la contraseña existe como alternativa porque
-        el correo del plan gratuito de Supabase tiene un límite bajo de envíos.
+      <div className="mt-4 flex flex-col items-center gap-1 border-t border-borde pt-4">
+        {modo !== "registro" ? (
+          <button
+            type="button"
+            onClick={() => cambiarModo("registro")}
+            className="enlace-header border-0 bg-transparent"
+          >
+            ¿Primera vez? Crear cuenta
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => cambiarModo("contrasena")}
+            className="enlace-header border-0 bg-transparent"
+          >
+            ¿Ya tienes cuenta? Entra
+          </button>
+        )}
+
+        {modo !== "enlace" ? (
+          <button
+            type="button"
+            onClick={() => cambiarModo("enlace")}
+            className="enlace-header border-0 bg-transparent"
+          >
+            Prefiero recibir un enlace por correo
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => cambiarModo("contrasena")}
+            className="enlace-header border-0 bg-transparent"
+          >
+            Prefiero usar mi contraseña
+          </button>
+        )}
+      </div>
+
+      <p className="mt-4 text-xs leading-5 text-tenue">
+        El correo del plan gratuito tiene un límite de envíos; por eso también puedes entrar
+        con contraseña.
       </p>
     </div>
   );

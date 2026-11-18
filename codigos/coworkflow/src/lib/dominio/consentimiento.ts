@@ -52,6 +52,18 @@ export const SECCIONES_AVISO: readonly SeccionAviso[] = [
 ];
 
 /**
+ * Tres puntos resumen que la tarjeta de consentimiento muestra antes de aceptar.
+ *
+ * El texto completo sigue en `SECCIONES_AVISO` y se renderiza íntegro en `/privacidad`; este
+ * resumen solo ayuda a decidir sin obligar a leer todo el aviso (Ley 21.719).
+ */
+export const RESUMEN_AVISO: readonly string[] = [
+  "Guardamos la hora en que entras y sales.",
+  "El panel público solo muestra totales, nunca tu nombre.",
+  "Borramos tus registros a los 90 días.",
+];
+
+/**
  * ¿La persona ya aceptó el aviso?
  *
  * El criterio es el mismo que aplica la RPC `registrar_scan` en Postgres
