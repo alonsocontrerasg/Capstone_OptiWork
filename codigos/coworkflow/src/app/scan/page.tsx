@@ -3,9 +3,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { ConfirmacionScan } from "@/components/scan/ConfirmacionScan";
+import { loginDesdeScan, portadaDesdeScan } from "@/lib/auth/redirects";
 import { obtenerSesion } from "@/lib/auth/session";
 import { tieneConsentimiento } from "@/lib/dominio/consentimiento";
-import { esquemaQueryScan } from "@/lib/validacion/scan";
+import { esquemaModoScan, esquemaQueryScan } from "@/lib/validacion/scan";
 
 export const metadata: Metadata = {
   title: "Marcar asistencia",
@@ -32,6 +33,15 @@ function modoDelToken(token: string): "entrada" | "salida" | null {
   return null;
 }
 
+/** Modo de `?modo=` validado con el enum cerrado; si no es un string válido, `null`. */
+function modoDeParametro(
+  valor: string | string[] | undefined,
+): "entrada" | "salida" | null {
+  if (typeof valor !== "string") return null;
+  const parseado = esquemaModoScan.safeParse(valor);
+  return parseado.success ? parseado.data : null;
+}
+
 /**
  * `/scan` — confirmación del escaneo del QR (S-15, S-16, S-33).
  *
@@ -39,15 +49,26 @@ function modoDelToken(token: string): "entrada" | "salida" | null {
  * token, y muestra el botón de confirmación. La escritura ocurre en `POST /api/scan`, así
  * que seguir el enlace (o que un preview lo abra) no registra asistencia.
  *
- * Sin sesión se redirige a `/login` **sin `?next=` y sin el token**: la URL de login no
- * debe llevar el token en el historial ni en los logs del servidor.
+ * Sin sesión se redirige a `/login?desde=scan&modo=<entrada|salida>` (o a `/login` si el
+ * modo no es válido) **sin el token**: la URL de login no debe llevar el token en el
+ * historial ni en los logs del servidor. Lo mismo al volver a la portada por falta de
+ * consentimiento. El indicador solo alimenta los mensajes de "vuelve a escanear".
  */
 export default async function PaginaScan({ searchParams }: Props) {
-  const sesion = await obtenerSesion();
-  if (!sesion) redirect("/login");
-  if (!tieneConsentimiento(sesion.perfil)) redirect("/");
-
   const params = await searchParams;
+
+  // Solo `?modo=` (enum cerrado) alimenta el indicador de transición: en estas ramas no se
+  // lee `params.t`. Si falta o es inválido, los redirects quedan exactamente como antes.
+  const modoTransicion = modoDeParametro(params.modo);
+
+  const sesion = await obtenerSesion();
+  if (!sesion) {
+    redirect(modoTransicion ? loginDesdeScan(modoTransicion) : "/login");
+  }
+  if (!tieneConsentimiento(sesion.perfil)) {
+    redirect(modoTransicion ? portadaDesdeScan(modoTransicion) : "/");
+  }
+
   const validado = esquemaQueryScan.safeParse({
     t: params.t,
     modo: params.modo,

@@ -9,6 +9,7 @@ import {
   consentimientoDesactualizado,
   tieneConsentimiento,
 } from "@/lib/dominio/consentimiento";
+import { modoDesdeIndicadorScan } from "@/lib/validacion/scan";
 
 const formatoFecha = new Intl.DateTimeFormat("es-CL", {
   dateStyle: "long",
@@ -22,10 +23,16 @@ function formatearFecha(iso: string | null): string | null {
   return Number.isNaN(fecha.getTime()) ? null : formatoFecha.format(fecha);
 }
 
-export default async function Home() {
+type Props = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function Home({ searchParams }: Props) {
   const sesion = await obtenerSesion();
   const conConsentimiento = tieneConsentimiento(sesion?.perfil);
   const desactualizado = consentimientoDesactualizado(sesion?.perfil);
+  const params = await searchParams;
+  const modoScan = modoDesdeIndicadorScan(params.desde, params.modo);
 
   return (
     <div className="flex flex-1 flex-col">
@@ -115,6 +122,16 @@ export default async function Home() {
 
         {sesion && conConsentimiento && (
           <section className="mt-8 space-y-4">
+            {!desactualizado && modoScan && (
+              <div
+                role="status"
+                className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm leading-6 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200"
+              >
+                ¡Listo! Último paso: escanea de nuevo el QR de{" "}
+                <strong>{modoScan === "entrada" ? "entrada" : "salida"}</strong> para
+                marcar tu asistencia.
+              </div>
+            )}
             <div className="rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
               <h2 className="text-lg font-semibold">
                 Hola{sesion.usuario.email ? `, ${sesion.usuario.email}` : ""}

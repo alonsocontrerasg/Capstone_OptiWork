@@ -24,6 +24,33 @@ export const esquemaQueryScan = z.object({
   modo: esquemaModoScan.optional().catch(undefined),
 });
 
+/**
+ * Indicador de transición `desde=scan&modo=entrada|salida` (sin token).
+ *
+ * Solo alimenta los mensajes de "vuelve a escanear"; no autoriza nada. `desde` y `modo` son
+ * enums cerrados y, si falta uno o llega otro valor, el indicador completo se ignora.
+ */
+export const esquemaIndicadorScan = z.object({
+  desde: z.enum(["scan"]).optional(),
+  modo: esquemaModoScan.optional(),
+});
+
+/** Modo del indicador si `desde=scan` y `modo` es válido; en cualquier otro caso, `null`. */
+export function modoDesdeIndicadorScan(
+  desde: string | string[] | undefined,
+  modo: string | string[] | undefined,
+): "entrada" | "salida" | null {
+  const parseado = esquemaIndicadorScan.safeParse({
+    desde: typeof desde === "string" ? desde : undefined,
+    modo: typeof modo === "string" ? modo : undefined,
+  });
+  if (!parseado.success) return null;
+  if (parseado.data.desde !== "scan" || parseado.data.modo === undefined) {
+    return null;
+  }
+  return parseado.data.modo;
+}
+
 /** Cuerpo de `POST /api/scan`: `{ t }`. Los campos extra se descartan. */
 export const esquemaCuerpoScan = z.object({ t: esquemaTokenScan });
 

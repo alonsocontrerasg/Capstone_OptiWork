@@ -67,3 +67,21 @@ export function normalizarDestinoInterno(
     return DESTINO_POR_DEFECTO;
   }
 }
+
+/**
+ * `/login` con el indicador de transición desde un escaneo (sin token).
+ *
+ * `modo` es un enum cerrado (`entrada` | `salida`), así que el valor es URL-safe.
+ */
+export function loginDesdeScan(modo: "entrada" | "salida"): string {
+  return `/login?desde=scan&modo=${modo}`;
+}
+
+/**
+ * Portada con el indicador de transición; ahí se muestra el aviso final ("escanea de nuevo").
+ *
+ * Es una ruta interna fija: el indicador nunca se usa como destino de navegación.
+ */
+export function portadaDesdeScan(modo: "entrada" | "salida"): string {
+  return `/?desde=scan&modo=${modo}`;
+}

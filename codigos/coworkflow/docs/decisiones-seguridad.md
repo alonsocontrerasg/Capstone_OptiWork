@@ -59,6 +59,7 @@
 | S-41 | `z.config({ jitless: true })` en el cliente para no necesitar `'unsafe-eval'` | 5 |
 | S-42 | Cliente de navegador solo para Realtime: sin sesión y solo `ocupacion_actual` | 5 |
 | S-43 | Script de simulación local: `service_role` desde el entorno y confirmación explícita | 5 |
+| S-44 | Transición post-login del escaneo: indicador sin token (`desde=scan` + `modo` cerrado) | 6 |
 
 ---
 
@@ -1533,6 +1534,53 @@ de escribir `si`.
 | 1 | Una **caída de Supabase se ve como 404**: `obtenerZonaPorSlug` devuelve `null` tanto si la zona no existe como si la consulta falla, y la página llama a `notFound()`. | Verificado leyendo `src/lib/supabase/zonas.ts` y `src/app/dashboard/page.tsx` (no reproducido con Supabase caído). Mitigación futura: distinguir «error» de «no existe» |
 | 2 | **Sin rate limit en las lecturas** del dashboard (hasta 7 consultas por visita, S-37), ni por IP ni por usuario. | Decidido a propósito en S-37; mitigación futura: cubo separado **fail-open** para lecturas |
 | 3 | El `router.refresh()` de la reconexión de Realtime **no tiene freno** (S-42): cada reconexión repite las consultas del servidor. | Sin medir en producción; mitigación futura: retroceso exponencial o debounce |
+
+---
+
+## Etapa 6 — Administración, simulación y pruebas
+
+### S-44 · Transición post-login del escaneo: solo un indicador sin token
+
+**Decisión.** Cuando `GET /scan` no tiene sesión o consentimiento, redirige a
+`/login?desde=scan&modo=<entrada|salida>` o a `/?desde=scan&modo=<entrada|salida>` en vez de
+`/login` o `/`. El indicador viaja **sin el token**: `desde` es un enum cerrado (`scan`) y
+`modo` es `entrada|salida`, validados con zod (`esquemaIndicadorScan` en
+`src/lib/validacion/scan.ts`); si falta uno o llega otro valor, el indicador completo se
+ignora. En `/scan` el modo se deriva **solo** de `?modo=` (enum cerrado) y las ramas de
+redirect no leen `params.t`.
+
+`/login` muestra «Paso 1 de 2: inicia sesión o crea tu cuenta…» y fija como destino interno
+`/?desde=scan&modo=<modo>`. Ese destino recorre el camino ya existente: `POST /auth/login`
+lo sanea con `normalizarDestinoInterno` (S-27), el enlace mágico lo devuelve vía
+`/auth/callback?next=…` (saneado otra vez en el callback) y, al llegar a la portada con la
+sesión y el consentimiento vigentes, se muestra «¡Listo! Último paso: escanea de nuevo el QR
+de <modo>…» con `role="status"`. Tras aceptar el consentimiento, `router.refresh()` conserva
+la URL, así que la portada vuelve a renderizar con el mismo indicador y aparece el aviso.
+
+**Amenaza.** El problema reportado: la persona escanea, crea cuenta o acepta el aviso y cree
+que ya marcó asistencia. Conservar el token tras el login habilitaría replay dentro de su
+ventana (S-12, S-15) y filtrarlo en la URL del login/portada lo expondría en el historial y
+en los logs; y si el indicador se usara como destino de navegación sin validar, reaparecería
+el open redirect.
+
+**Por qué esta solución.** El token es la prueba de presencia y vence en 45–90 s: no se
+conserva. El indicador es solo UX y no autoriza nada: el alta de la asistencia sigue
+dependiendo de volver a escanear un token fresco. Al codificarlo como parámetros de un
+destino interno (`/?desde=scan&modo=…`) y reutilizar `normalizarDestinoInterno`, no se
+introduce ningún salto de dominio nuevo; `desde`/`modo` solo se usan para elegir texto y
+para armar URLs internas fijas (`loginDesdeScan`, `portadaDesdeScan`), nunca como target de
+redirección.
+
+**Verificación.** Se comprobó que `normalizarDestinoInterno("/?desde=scan&modo=entrada")`
+conserva la ruta y la query: pasa los filtros de entrada (líneas 45-47), `new URL()` mantiene
+`https://app.invalid` como origen (52-55) y el resultado `/?desde=scan&modo=entrada` no
+empieza con `//` ni contiene `\` (61-63); una prueba con `new URL` del mismo caso devuelve
+`/?desde=scan&modo=entrada`. El recorrido completo en navegador (login, enlace mágico y
+consentimiento) **no** se ejecutó en esta tanda; sí se ejecutaron `npm run lint`,
+`npx tsc --noEmit` y `npm run build` sin errores.
+
+**Dónde se implementa.** `src/lib/validacion/scan.ts`, `src/lib/auth/redirects.ts`,
+`src/app/scan/page.tsx`, `src/app/login/page.tsx`, `src/app/page.tsx`.
 
 ---
 
