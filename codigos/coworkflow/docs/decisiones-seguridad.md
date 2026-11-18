@@ -61,6 +61,7 @@
 | S-43 | Script de simulación local: `service_role` desde el entorno y confirmación explícita | 5 |
 | S-44 | Transición post-login del escaneo: indicador sin token (`desde=scan` + `modo` cerrado) | 6 |
 | S-45 | Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente | 6 |
+| S-46 | `GET /scan` lee la zona del token con un UUID validado, solo para presentación | 6 |
 
 ---
 
@@ -1666,6 +1667,66 @@ restricción que ya tenía `zonas`.
 
 ---
 
+### S-46 · `GET /scan` resuelve la zona con un `zona_uuid` validado y solo para presentación
+
+**Decisión.** La pantalla de confirmación muestra el nombre de la zona, la hora local y el estado
+del horario antes de confirmar. Para eso `GET /scan` extrae la parte 1 del token
+(`v1.<zona_uuid>.<modo>.<ventana>.<firma>`) y llama a `obtenerZonaPorId(id)` en
+`src/lib/supabase/zonas.ts`. Esa función valida el id con zod (`esquemaUuidZona`, `z.uuid()`)
+**antes** de consultar: si no es un UUID devuelve `null` sin tocar Supabase. La consulta pide las
+mismas columnas públicas que `obtenerZonaPorSlug` —incluido el embed `horarios_zona`— con la
+clave `anon` y RLS, y es la única lectura nueva del flujo. La hora local se formatea en el
+servidor con `Intl.DateTimeFormat("es-CL", { hour, minute, hourCycle: "h23", timeZone })` y el
+estado del horario con `textoEstadoHorario`. Si la zona no existe, el id no es un UUID o la
+lectura falla, la tarjeta omite el bloque y el botón de confirmación sigue disponible. La
+consulta ocurre **después** de exigir sesión y consentimiento: un visitante anónimo no la
+dispara.
+
+**Amenaza.** Un token que solo cumple `esquemaTokenScan` (letras, puntos, guiones, ≤256) puede
+llevar cualquier cadena en la posición de `zona_uuid`; pasarla a PostgREST produce un error
+`22P02` («invalid input syntax for type uuid») y, en el peor caso, un 500 en una pantalla que la
+persona está usando en la puerta. Además, mostrar el nombre de una zona a partir de un token
+**no verificado** podría hacer creer que el escaneo ya fue validado: la persona vería «Entrada
+en Hub Providencia» con un token inventado.
+
+**Por qué esta solución.** La presentación no necesita la firma: el nombre, el aforo y el horario
+ya son públicos (el dashboard los lee con `anon`), y el `zona_uuid` solo elige qué fila mostrar.
+La validación con zod corta el caso `22P02` en el borde y mantiene la regla de S-15 (todo input
+acotado y con forma conocida antes de la consulta). El token **no** se usa para escribir: la
+operación real sigue en `POST /api/scan` → `registrar_scan`, que verifica firma y ventana en
+Postgres (S-05, S-06, S-16). Un token inventado puede hacer que la pantalla muestre el nombre de
+una zona, pero al confirmar recibe `token_invalido` (403) y no se registra nada. Como
+`token_expirado` y `token_invalido` comparten texto (S-33), la pantalla tampoco revela si el
+token existió. El nombre y el modo se usan solo para textos y para URLs internas fijas.
+
+**Verificación.** En Node 26 se comprobó que `z.uuid()` acepta un UUID v4 de
+`crypto.randomUUID()` (también en mayúsculas) y rechaza `"abc"` y
+`"00000000-0000-0000-0000-000000000001"`, así que `obtenerZonaPorId("no-es-uuid")` devuelve
+`null` antes de la consulta. Con el mismo Node, `Intl.DateTimeFormat("es-CL", { hour:
+"2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/Santiago" })` formatea
+`2026-11-18T17:32Z` como `14:32` y `2026-11-19T03:05Z` como `00:05`. Contra Supabase, con la
+clave `anon` y el select de `COLUMNAS_CON_HORARIO` (2026-11-18), `hub-providencia` devuelve
+`Hub Providencia`/`America/Santiago` con 5 filas de `horarios_zona`, tanto por `slug` como por
+`id`, y su id real (`36626dc5-…-5dfa436e5929`) pasa `z.uuid()`; la misma consulta con un `id` no
+UUID devuelve `22P02`, que es exactamente lo que la guarda corta antes de consultar. `npm run
+lint`, `npx tsc --noEmit` y `npm run build` pasan sin errores. El recorrido en navegador
+(confirmar, resultado, recarga y limpieza de la URL) **no** se ejecutó en esta tanda.
+
+**Dónde se implementa.** `src/lib/validacion/scan.ts` (`esquemaUuidZona`),
+`src/lib/supabase/zonas.ts` (`obtenerZonaPorId`), `src/app/scan/page.tsx` (extracción del
+`zona_uuid`, hora local y `textoEstadoHorario`), `src/lib/dominio/scan.ts`
+(`PRESENTACION_RESULTADO_SCAN`) y `src/components/scan/ConfirmacionScan.tsx` (confirmación y
+resultado).
+
+**Tradeoff.** `GET /scan` agrega una lectura a `zonas`; se acepta porque solo se ejecuta con
+sesión y consentimiento y devuelve una fila. El nombre y el horario mostrados antes de confirmar
+pueden quedar desactualizados si entre el render y el toque del botón cambia el horario: la
+decisión real la toma `registrar_scan` y la pantalla de resultado muestra
+`fuera_horario`/`zona_inactiva` si corresponde. La hora local es una foto del momento en que se
+abrió el enlace; no sigue avanzando en pantalla.
+
+---
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
@@ -1706,4 +1767,5 @@ restricción que ya tenía `zonas`.
 | 2026-11-12 | Etapa 5 (Tanda 2): Recharts como isla de cliente con `ssr: false` para no relajar la CSP (S-39), mapa de calor día × hora renderizado en el servidor como tabla HTML con datos agregados (S-40) y `z.config({ jitless: true })` en `src/instrumentation-client.ts` para que Zod no use `new Function` (S-41). Se cablean `aforoMax`, `hora_apertura` y `hora_cierre` de la zona en `EstadisticasDashboard` y se añaden `construirPuntosPorHora`, `construirPuntosHoy` y `horasDelHorario` en `src/lib/dominio/estadisticas.ts` |
 | 2026-11-12 | Etapa 5 (Tandas 3, 4a y 4b + correcciones de este paso): isla de Realtime con un cliente de navegador sin sesión, solo `ocupacion_actual` filtrada por zona, eventos validados y `router.refresh()` tras una reconexión (S-42); script de simulación local con `service_role` leída del entorno, confirmación escribiendo el host, cuentas `sim-*` baneadas y `--dry-run`/`--reemplazar`/`--limpiar` (S-43, con el hallazgo corregido de las contraseñas derivadas de un PRNG con semilla fija). Se corrigen afirmaciones que no coincidían con el código: S-37 (el selector 7/30 son enlaces `?rango=` renderizados en el servidor, con una sola serie del rango más las franjas de 30 días del mapa, y el costo real de hasta 7 consultas por visita anónima sin rate limit), S-38 (el mapa de calor no viaja al navegador: es HTML del servidor; al cliente solo llegan ≤24 puntos por gráfico), S-39 (el nonce no es la razón: React aplica `style` por CSSOM; verificado sin errores de CSP en build de producción con datos el 2026-11-12), S-40 (límite explícito: las celdas no tienen k-anonimato; el k=5 de S-18/S-23 aplica solo a permanencia y personas distintas), S-41 (verificado que desaparece el error de `unsafe-eval`; se añade que Zod pesa en todas las páginas) y S-03/S-04 (consumidores reales y RPC que usa el dashboard). S-37 y S-38 se mueven a la sección de la Etapa 5 y se declaran las limitaciones conocidas (una caída de Supabase se ve como 404, lecturas sin rate limit, `router.refresh()` sin freno) |
 | 2026-11-18 | Etapa 6b: horario semanal por zona (S-45). Migración 10 (`horarios_zona`, `zona_abierta_en`, `ocupacion_por_franja` por día) y bloque de seed de `hub-providencia` (lun–jue 08:30–18:00, vie 08:30–17:00, fin de semana cerrado), aplicados en Supabase. `ZonaPublica.horarios_zona` se lee solo en `obtenerZonaPorSlug` (`COLUMNAS_CON_HORARIO`); `horarioDelDia` resuelve el día ISO con `diaSemanaEnZona` y `textoEstadoHorario` pasa a «abre el <día> a las HH:MM» cuando faltan más de un día («mañana» se mantiene). En la simulación local, sábado y domingo quedan con `PROBABILIDAD_ASISTENCIA = 0`. Verificado en Supabase: 5 filas de horario, `zona_abierta(hub)` = `true` un miércoles 16:30 y `ocupacion_por_franja(hub, 30)` solo con `dow` 1..5; las pruebas negativas se hicieron solo en un clúster PostgreSQL local temporal |
+| 2026-11-18 | Etapa 6a (Tanda 4): rediseño de presentación del flujo de escaneo. `GET /scan` resuelve el nombre y el horario de la zona con `obtenerZonaPorId` y `esquemaUuidZona` (S-46); la pantalla de resultado usa `PRESENTACION_RESULTADO_SCAN` (los 13 resultados, con tono éxito/aviso). `ConfirmacionScan` recibe `nombreZona`, `horaLocal` y `textoFueraHorario`; el POST, el `replaceState`, los redirects y las reglas de negocio no cambian. La portada con sesión queda como saludo corto + accesos rápidos y el consentimiento vigente como una línea |
 

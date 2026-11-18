@@ -13,6 +13,16 @@ export const esquemaTokenScan = z
   .max(256, "El código QR es demasiado largo.")
   .regex(/^[A-Za-z0-9._-]+$/, "El código QR tiene un formato inválido.");
 
+/**
+ * `zona_uuid` que viaja dentro del token (`v1.<zona_uuid>.<modo>.<ventana>.<firma>`).
+ *
+ * `GET /scan` lo usa solo para mostrar el nombre de la zona y su horario, y lo valida con zod
+ * **antes** de consultar `zonas` (S-46): un token con la forma permitida pero con una «zona»
+ * que no es un UUID no llega a PostgREST (evita el error `22P02`). No autoriza nada: la firma,
+ * la ventana y la zona real se verifican en Postgres al confirmar (S-16).
+ */
+export const esquemaUuidZona = z.uuid();
+
 export const esquemaModoScan = z.enum(["entrada", "salida"]);
 
 /**

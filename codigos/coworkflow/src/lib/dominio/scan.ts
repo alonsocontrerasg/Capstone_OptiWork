@@ -67,6 +67,97 @@ export const MAPA_RESULTADO_SCAN: Record<ResultadoScan, MapeoResultadoScan> = {
   },
 };
 
+export type TonoResultadoScan = "exito" | "aviso";
+
+export type PresentacionResultadoScan = {
+  /** Título corto de la pantalla de resultado. */
+  titulo: string;
+  /** Una línea de contexto, sin datos personales. */
+  detalle: string;
+  /** `exito` pinta el semáforo «bajo»; `aviso`, el «moderado». */
+  tono: TonoResultadoScan;
+};
+
+/**
+ * Presentación de la pantalla de resultado de `/scan`: título, detalle y tono.
+ *
+ * Es una capa distinta de `MAPA_RESULTADO_SCAN`: el mapa define el HTTP y el mensaje que
+ * devuelve `POST /api/scan`; esto define cómo se ve la confirmación en el cliente. El registro
+ * es exhaustivo respecto de `ResultadoScan`, así que agregar un literal obliga a agregar su
+ * texto aquí. `token_expirado` y `token_invalido` comparten título y detalle a propósito
+ * (S-33): la pantalla no revela si un token existió alguna vez.
+ */
+export const PRESENTACION_RESULTADO_SCAN: Record<
+  ResultadoScan,
+  PresentacionResultadoScan
+> = {
+  entrada_ok: {
+    titulo: "Entrada registrada",
+    detalle: "Al irte, escanea el QR de SALIDA.",
+    tono: "exito",
+  },
+  salida_ok: {
+    titulo: "Salida registrada",
+    detalle: "Gracias por venir. Nos vemos pronto.",
+    tono: "exito",
+  },
+  sesion_ya_abierta: {
+    titulo: "Ya tienes una entrada activa",
+    detalle: "Marca tu salida antes de volver a entrar.",
+    tono: "aviso",
+  },
+  sin_sesion_abierta: {
+    titulo: "No tienes una entrada activa",
+    detalle: "Escanea el QR de entrada para comenzar.",
+    tono: "aviso",
+  },
+  cooldown: {
+    titulo: "Espera unos segundos",
+    detalle: "Acabas de escanear. Vuelve a intentarlo en un momento.",
+    tono: "aviso",
+  },
+  demasiados_intentos: {
+    titulo: "Demasiados intentos",
+    detalle: "Espera un minuto y vuelve a intentarlo.",
+    tono: "aviso",
+  },
+  token_expirado: {
+    titulo: "El código venció",
+    detalle: "Escanea el QR del acceso otra vez.",
+    tono: "aviso",
+  },
+  token_invalido: {
+    titulo: "El código venció",
+    detalle: "Escanea el QR del acceso otra vez.",
+    tono: "aviso",
+  },
+  no_autenticado: {
+    titulo: "Tu sesión venció",
+    detalle: "Inicia sesión y escanea el código otra vez.",
+    tono: "aviso",
+  },
+  fuera_horario: {
+    titulo: "El cowork está cerrado",
+    detalle: "Vuelve dentro del horario de atención.",
+    tono: "aviso",
+  },
+  zona_inactiva: {
+    titulo: "Esta zona no está habilitada",
+    detalle: "Consulta al equipo del Hub.",
+    tono: "aviso",
+  },
+  rate_limited: {
+    titulo: "Demasiados intentos",
+    detalle: "Espera un momento y vuelve a intentarlo.",
+    tono: "aviso",
+  },
+  sin_consentimiento: {
+    titulo: "Falta tu consentimiento",
+    detalle: "Acepta el aviso de privacidad para marcar tu asistencia.",
+    tono: "aviso",
+  },
+};
+
 const CONJUNTO_RESULTADOS: ReadonlySet<string> = new Set(RESULTADOS_SCAN);
 
 /**

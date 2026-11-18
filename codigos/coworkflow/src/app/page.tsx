@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { QrCode } from "lucide-react";
+import { LayoutDashboard, QrCode } from "lucide-react";
 
 import { AvisoConsentimiento } from "@/components/auth/AvisoConsentimiento";
 import { obtenerSesion } from "@/lib/auth/session";
@@ -37,116 +37,137 @@ export default async function Home({ searchParams }: Props) {
   return (
     <div className="flex flex-1 flex-col">
       <main className="contenedor flex-1 py-10">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Ocupación del cowork en tiempo real
-        </h1>
-        <p className="mt-3 max-w-2xl text-base leading-7 text-zinc-600 dark:text-zinc-400">
-          Escanea el QR de entrada o salida con la cámara de tu celular y el contador se
-          actualiza solo. El dashboard público muestra únicamente cifras agregadas: nunca
-          tu nombre ni tus horarios.
-        </p>
-
         {!sesion && (
-          <section className="mt-8 rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
-            <h2 className="text-lg font-semibold">Entra para marcar tu asistencia</h2>
-            <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Usa un enlace mágico por correo o tu contraseña. En la primera sesión verás
-              el aviso de privacidad (Ley 21.719) y podrás aceptarlo o rechazarlo.
+          <>
+            <h1 className="text-3xl font-semibold tracking-tight">
+              Ocupación del cowork en tiempo real
+            </h1>
+            <p className="mt-3 max-w-2xl text-base leading-7 text-tenue">
+              Escanea el QR de entrada o salida con la cámara de tu celular. El panel
+              público muestra solo cifras agregadas: nunca tu nombre ni tus horarios.
             </p>
-            <Link
-              href="/login"
-              className="mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
-            >
-              Ir a iniciar sesión
-            </Link>
-          </section>
+
+            <section className="mx-auto mt-8 max-w-md">
+              <div className="tarjeta">
+                <span className="grid size-12 place-items-center rounded-2xl bg-marca-suave text-marca">
+                  <QrCode aria-hidden className="size-6" />
+                </span>
+                <h2 className="mt-4 text-lg font-semibold">
+                  Entra para marcar tu asistencia
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-tenue">
+                  Usa tu contraseña o un enlace por correo. La primera vez verás el aviso
+                  de privacidad (Ley 21.719).
+                </p>
+                <Link href="/login" className="btn-primario mt-5 w-full">
+                  Iniciar sesión
+                </Link>
+                <Link href="/dashboard" className="btn-secundario mt-2 w-full">
+                  Ver la ocupación
+                </Link>
+              </div>
+            </section>
+          </>
         )}
 
         {sesion && !conConsentimiento && (
-          <section className="mx-auto mt-8 max-w-md">
-            <AvisoConsentimiento
-              version={CONSENTIMIENTO_VERSION}
-              fecha={CONSENTIMIENTO_FECHA}
-              aceptadoAt={null}
-              requiereAceptacion
-            />
-          </section>
-        )}
-
-        {sesion && conConsentimiento && (
-          <section className="mx-auto mt-8 max-w-md space-y-4">
-            {!desactualizado && modoScan && (
-              <div role="status" className="rounded-3xl bg-marca p-6 text-white">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-white/80">
-                    Último paso
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <span aria-hidden className="flex gap-1">
-                      <span className="h-1.5 w-6 rounded-full bg-white" />
-                      <span className="h-1.5 w-6 rounded-full bg-white" />
-                    </span>
-                    <span className="text-xs font-medium text-white/80">Paso 2 de 2</span>
-                  </span>
-                </div>
-
-                <QrCode aria-hidden className="mt-5 size-16" />
-                <h2 className="mt-4 text-xl font-semibold tracking-tight">
-                  Escanea de nuevo el QR de{" "}
-                  {modoScan === "entrada" ? "ENTRADA" : "SALIDA"}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-white/90">
-                  Está en la pantalla del acceso.
-                </p>
-                <p className="mt-4 text-xs text-white/80">Solo la primera vez.</p>
-              </div>
-            )}
-            <div className="rounded-2xl border border-zinc-200 p-6 dark:border-zinc-800">
-              <h2 className="text-lg font-semibold">
-                Hola{sesion.usuario.email ? `, ${sesion.usuario.email}` : ""}
-              </h2>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                Sesión iniciada. Rol:{" "}
-                <span className="font-medium text-tinta">
-                  {sesion.perfil?.rol ?? "usuario"}
-                </span>
-                .
-              </p>
-
-              <div className="mt-4 flex flex-wrap gap-3">
-                {sesion.perfil?.rol === "admin" && (
-                  <Link
-                    href="/qr"
-                    className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
-                  >
-                    Abrir QR rotativo
-                  </Link>
-                )}
-                <Link
-                  href="/dashboard"
-                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
-                  Ver dashboard
-                </Link>
-              </div>
-            </div>
-
-            {desactualizado ? (
+          <>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Un paso antes de empezar
+            </h1>
+            <p className="mt-1 text-sm text-tenue">
+              Necesitamos tu consentimiento para registrar entradas y salidas.
+            </p>
+            <section className="mx-auto mt-6 max-w-md">
               <AvisoConsentimiento
                 version={CONSENTIMIENTO_VERSION}
                 fecha={CONSENTIMIENTO_FECHA}
-                aceptadoAt={sesion.perfil?.consentimiento_at ?? null}
+                aceptadoAt={null}
                 requiereAceptacion
               />
-            ) : (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Consentimiento aceptado el{" "}
-                {formatearFecha(sesion.perfil?.consentimiento_at ?? null) ?? "—"}{" "}
-                (versión {sesion.perfil?.consentimiento_version ?? "—"}). Solo tú y el
-                equipo administrador pueden ver tus sesiones.
-              </p>
-            )}
-          </section>
+            </section>
+          </>
+        )}
+
+        {sesion && conConsentimiento && (
+          <>
+            <h1 className="text-2xl font-semibold tracking-tight">Hola</h1>
+            <p className="mt-1 text-sm text-tenue">
+              {sesion.usuario.email ?? "Sesión iniciada"}
+            </p>
+
+            <section className="mx-auto mt-6 max-w-md space-y-4">
+              {!desactualizado && modoScan && (
+                <div role="status" className="rounded-3xl bg-marca p-6 text-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-white/80">
+                      Último paso
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span aria-hidden className="flex gap-1">
+                        <span className="h-1.5 w-6 rounded-full bg-white" />
+                        <span className="h-1.5 w-6 rounded-full bg-white" />
+                      </span>
+                      <span className="text-xs font-medium text-white/80">
+                        Paso 2 de 2
+                      </span>
+                    </span>
+                  </div>
+
+                  <QrCode aria-hidden className="mt-5 size-16" />
+                  <h2 className="mt-4 text-xl font-semibold tracking-tight">
+                    Escanea de nuevo el QR de{" "}
+                    {modoScan === "entrada" ? "ENTRADA" : "SALIDA"}
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-white/90">
+                    Está en la pantalla del acceso.
+                  </p>
+                  <p className="mt-4 text-xs text-white/80">Solo la primera vez.</p>
+                </div>
+              )}
+
+              <div className="tarjeta">
+                <h2 className="text-base font-semibold">Accesos rápidos</h2>
+                <div className="mt-4 space-y-2">
+                  <Link href="/dashboard" className="btn-primario w-full">
+                    <LayoutDashboard aria-hidden className="mr-2 size-4" />
+                    Ver la ocupación
+                  </Link>
+                  {sesion.perfil?.rol === "admin" && (
+                    <Link href="/qr" className="btn-secundario w-full">
+                      <QrCode aria-hidden className="mr-2 size-4" />
+                      Abrir el QR rotativo
+                    </Link>
+                  )}
+                </div>
+                <p className="mt-4 text-xs leading-5 text-tenue">
+                  Para marcar tu asistencia, escanea el QR del acceso con la cámara del
+                  celular.
+                </p>
+              </div>
+
+              {desactualizado ? (
+                <AvisoConsentimiento
+                  version={CONSENTIMIENTO_VERSION}
+                  fecha={CONSENTIMIENTO_FECHA}
+                  aceptadoAt={sesion.perfil?.consentimiento_at ?? null}
+                  requiereAceptacion
+                />
+              ) : (
+                <p className="text-xs leading-5 text-tenue">
+                  Consentimiento versión{" "}
+                  {sesion.perfil?.consentimiento_version ?? "—"} aceptado el{" "}
+                  {formatearFecha(sesion.perfil?.consentimiento_at ?? null) ?? "—"}.{" "}
+                  <Link
+                    href="/privacidad"
+                    className="font-medium text-marca underline underline-offset-4"
+                  >
+                    Ver el aviso
+                  </Link>
+                </p>
+              )}
+            </section>
+          </>
         )}
       </main>
     </div>
