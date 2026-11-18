@@ -67,15 +67,15 @@ const PICO_MAXIMO = 90;
 const PICO_DESDE = 11 * 60;
 const PICO_HASTA = 15 * 60;
 const DIAS_LABORALES = new Set([1, 2, 3, 4, 5]);
-/** Lunes a jueves casi lleno, viernes flojo y fin de semana casi vacío. */
+/** Lunes a jueves casi lleno, viernes flojo y fin de semana sin asistencia (0). */
 const PROBABILIDAD_ASISTENCIA: Record<number, number> = {
   1: 0.95,
   2: 0.95,
   3: 0.95,
   4: 0.9,
   5: 0.78,
-  6: 0.32,
-  7: 0.15,
+  6: 0,
+  7: 0,
 };
 const PROBABILIDAD_MAXIMA = 0.95;
 const USUARIOS_POR_DEFECTO = 60;

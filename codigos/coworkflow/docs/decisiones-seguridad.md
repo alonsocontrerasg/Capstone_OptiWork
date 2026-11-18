@@ -60,6 +60,7 @@
 | S-42 | Cliente de navegador solo para Realtime: sin sesión y solo `ocupacion_actual` | 5 |
 | S-43 | Script de simulación local: `service_role` desde el entorno y confirmación explícita | 5 |
 | S-44 | Transición post-login del escaneo: indicador sin token (`desde=scan` + `modo` cerrado) | 6 |
+| S-45 | Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente | 6 |
 
 ---
 
@@ -1603,6 +1604,68 @@ consentimiento) **no** se ejecutó en esta tanda; sí se ejecutaron `npm run lin
 
 ---
 
+### S-45 · Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente
+
+**Decisión.** El horario deja de ser un único par `zonas.hora_apertura`/`hora_cierre` para todos
+los días. La migración 10 agrega `public.horarios_zona (zona_id, dia_semana, apertura, cierre)`:
+PK `(zona_id, dia_semana)`, `dia_semana` ISO 8601 (`1` = lunes … `7` = domingo, la misma
+convención que `extract(isodow)`), `check dia_semana between 1 and 7` y `check apertura < cierre`
+(sin cruzar medianoche). RLS de lectura pública y escritura solo para `es_admin()`, con los mismos
+privilegios de tabla que `zonas`. Regla de compatibilidad: **un día sin fila está cerrado** y una
+zona **sin ninguna fila** sigue usando el horario único de `zonas`, así que las zonas creadas antes
+de la migración 10 no necesitan tocarse. La resolución del día vive en un solo lugar por motor:
+`public.zona_abierta_en(uuid, timestamptz)` (SECURITY DEFINER, `search_path` fijo y sin `EXECUTE`
+para la API, S-20) y `zona_abierta(uuid)` pasa a ser su wrapper con `now()`, conservando firma,
+volatilidad y grants. La RPC `registrar_scan` y el job `coworkflow_cierre_auto` consultan
+`zona_abierta` (que delega en `zona_abierta_en(now())`), y
+`ocupacion_por_franja` compara cada snapshot con el horario de **su** día. En TypeScript,
+`horarioDelDia` consume el embed `horarios_zona` (solo en `obtenerZonaPorSlug`) y
+`textoEstadoHorario` nombra el próximo día abierto («abre el lunes a las 08:30»).
+
+**Amenaza.** Con un horario único, un sábado o un viernes por la tarde el servidor seguía aceptando
+escaneos (`fuera_horario` nunca se disparaba a la hora real) y el cierre automático de pg_cron
+cerraba a las 18:00 aunque la zona hubiera cerrado a las 17:00; además el dashboard afirmaba
+«Abierto hasta las 18:00» un domingo. El resultado es ocupación y permanencia calculadas sobre
+horas en que el espacio estaba cerrado, y una persona puede quedar con una sesión abierta hasta 8 h
+después del cierre real. Guardar el horario solo en el cliente no sirve: es el servidor y el cron
+quienes deciden si un scan es válido y cuándo cerrar.
+
+**Por qué esta solución.** Modelar el horario como filas por día ISO extiende el esquema sin tocar
+`zonas` ni el contrato del token QR, y permite zonas con horarios distintos sin cambios
+adicionales. La regla «sin filas = horario único» evita una migración de datos y deja el sistema
+funcionando si alguien todavía no cargó el horario semanal. Centralizar la decisión en
+`zona_abierta_en` evita que el borde, la RPC y el cron diverjan: los tres preguntan lo mismo. En
+TypeScript se usa `diaSemanaEnZona` (ISO, igual que `isodow`) en vez de `Date.getDay()` (0 =
+domingo), que correría el horario un día.
+
+**Verificación.** En Supabase (2026-11-18), con la migración 10 y el bloque de seed de
+`hub-providencia` aplicados: `horarios_zona` tiene 5 filas (días 1–4 `08:30–18:00`, día 5
+`08:30–17:00`); `zona_abierta(hub-providencia)` devuelve `true` un miércoles a las 16:30 y
+`ocupacion_por_franja(hub-providencia, 30)` solo devuelve `dow` 1..5. También se probó el embed real
+que arma `COLUMNAS_CON_HORARIO` (`zonas?select=…,horarios_zona(dia_semana, apertura, cierre)`) con
+la clave `anon`: devuelve `dia_semana` 1..5 con `08:30–18:00` y el viernes `08:30–17:00`. Las
+**pruebas negativas** (día sin fila, antes de la apertura, después del cierre y una zona sin filas
+que conserva el horario único) se ejecutaron **solo en un clúster PostgreSQL local temporal**, no
+en Supabase. Los textos de `textoEstadoHorario` se comprobaron como función pura con el horario de
+`hub-providencia` (sábado 10:00 y viernes 17:30 → «abre el lunes a las 08:30»; jueves 18:30 →
+«abre mañana a las 08:30»; lunes 07:00 → «abre a las 08:30»; miércoles 12:00 → «hasta las 18:00»;
+viernes 12:00 → «hasta las 17:00»). `npm run lint`, `npx tsc --noEmit` y `npm run build` pasan sin
+errores.
+
+**Dónde se implementa.** `supabase/migrations/20261118000000_horario_semanal.sql`,
+`supabase/seed.sql` (bloque de horario de `hub-providencia`), `src/lib/dominio/tiempo.ts`
+(`HorarioSemanalDia`, `horarioDelDia`, `textoEstadoHorario`), `src/lib/supabase/zonas.ts`
+(`COLUMNAS_CON_HORARIO` solo en `obtenerZonaPorSlug`) y `src/app/dashboard/page.tsx` (consumidor).
+
+**Tradeoff.** No hay calendario de feriados: un feriado entre semana se trata como día normal y el
+cierre automático no lo conoce. La edición del horario es manual por SQL hasta que `/admin` tenga
+la UI de horarios; mientras tanto, un cambio de horario exige un `update`/`insert` en
+`horarios_zona` (idempotente, como el bloque del seed). La migración tampoco valida solapes ni
+continuidad entre días: se asume `apertura < cierre` por día y sin cruzar medianoche, la misma
+restricción que ya tenía `zonas`.
+
+---
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
@@ -1642,4 +1705,5 @@ consentimiento) **no** se ejecutó en esta tanda; sí se ejecutaron `npm run lin
 | 2026-11-11 | Verificación DST de `tiempo.ts` contra un Postgres 18 temporal (`America/Santiago`): los mediodías locales de `2026-09-06` y `2026-04-05` y sus ventanas de 7 días coinciden al milisegundo con `date_trunc('day', … at time zone …) at time zone …` y con el redondeo a medianoche de la migración 9. También se probó la migración 9 en ese Postgres: `p_dias=5` → 0 filas, `p_dias=30` ≤168, `ocupacion_hoy` solo el día local, `anon`/`authenticated` con EXECUTE, `PUBLIC` sin él; `service_role` con EXECUTE en `refrescar_ocupacion`, confirmado también en Supabase el 2026-11-11 |
 | 2026-11-12 | Etapa 5 (Tanda 2): Recharts como isla de cliente con `ssr: false` para no relajar la CSP (S-39), mapa de calor día × hora renderizado en el servidor como tabla HTML con datos agregados (S-40) y `z.config({ jitless: true })` en `src/instrumentation-client.ts` para que Zod no use `new Function` (S-41). Se cablean `aforoMax`, `hora_apertura` y `hora_cierre` de la zona en `EstadisticasDashboard` y se añaden `construirPuntosPorHora`, `construirPuntosHoy` y `horasDelHorario` en `src/lib/dominio/estadisticas.ts` |
 | 2026-11-12 | Etapa 5 (Tandas 3, 4a y 4b + correcciones de este paso): isla de Realtime con un cliente de navegador sin sesión, solo `ocupacion_actual` filtrada por zona, eventos validados y `router.refresh()` tras una reconexión (S-42); script de simulación local con `service_role` leída del entorno, confirmación escribiendo el host, cuentas `sim-*` baneadas y `--dry-run`/`--reemplazar`/`--limpiar` (S-43, con el hallazgo corregido de las contraseñas derivadas de un PRNG con semilla fija). Se corrigen afirmaciones que no coincidían con el código: S-37 (el selector 7/30 son enlaces `?rango=` renderizados en el servidor, con una sola serie del rango más las franjas de 30 días del mapa, y el costo real de hasta 7 consultas por visita anónima sin rate limit), S-38 (el mapa de calor no viaja al navegador: es HTML del servidor; al cliente solo llegan ≤24 puntos por gráfico), S-39 (el nonce no es la razón: React aplica `style` por CSSOM; verificado sin errores de CSP en build de producción con datos el 2026-11-12), S-40 (límite explícito: las celdas no tienen k-anonimato; el k=5 de S-18/S-23 aplica solo a permanencia y personas distintas), S-41 (verificado que desaparece el error de `unsafe-eval`; se añade que Zod pesa en todas las páginas) y S-03/S-04 (consumidores reales y RPC que usa el dashboard). S-37 y S-38 se mueven a la sección de la Etapa 5 y se declaran las limitaciones conocidas (una caída de Supabase se ve como 404, lecturas sin rate limit, `router.refresh()` sin freno) |
+| 2026-11-18 | Etapa 6b: horario semanal por zona (S-45). Migración 10 (`horarios_zona`, `zona_abierta_en`, `ocupacion_por_franja` por día) y bloque de seed de `hub-providencia` (lun–jue 08:30–18:00, vie 08:30–17:00, fin de semana cerrado), aplicados en Supabase. `ZonaPublica.horarios_zona` se lee solo en `obtenerZonaPorSlug` (`COLUMNAS_CON_HORARIO`); `horarioDelDia` resuelve el día ISO con `diaSemanaEnZona` y `textoEstadoHorario` pasa a «abre el <día> a las HH:MM» cuando faltan más de un día («mañana» se mantiene). En la simulación local, sábado y domingo quedan con `PROBABILIDAD_ASISTENCIA = 0`. Verificado en Supabase: 5 filas de horario, `zona_abierta(hub)` = `true` un miércoles 16:30 y `ocupacion_por_franja(hub, 30)` solo con `dow` 1..5; las pruebas negativas se hicieron solo en un clúster PostgreSQL local temporal |
 

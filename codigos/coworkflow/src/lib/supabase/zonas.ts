@@ -1,3 +1,4 @@
+import type { HorarioSemanalDia } from "@/lib/dominio/tiempo";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
 /**
@@ -15,10 +16,19 @@ export type ZonaPublica = {
   hora_cierre: string;
   timezone: string;
   activa: boolean;
+  /** Horario semanal (migración 10); ausente en `listarZonasActivas`. */
+  horarios_zona?: HorarioSemanalDia[];
 };
 
 const COLUMNAS =
   "id, slug, nombre, aforo_max, umbral_bajo, umbral_alto, hora_apertura, hora_cierre, timezone, activa";
+
+/**
+ * `COLUMNAS` + el horario semanal embebido. Solo lo usa `obtenerZonaPorSlug`: el dashboard
+ * necesita el horario del día para `horarioDelDia`/`textoEstadoHorario`. El listado se queda
+ * con `COLUMNAS` para no traer filas de horario que no usa.
+ */
+const COLUMNAS_CON_HORARIO = `${COLUMNAS}, horarios_zona(dia_semana, apertura, cierre)`;
 
 export async function listarZonasActivas(): Promise<ZonaPublica[]> {
   const supabase = await crearClienteServidor();
@@ -40,7 +50,7 @@ export async function obtenerZonaPorSlug(slug: string): Promise<ZonaPublica | nu
   const supabase = await crearClienteServidor();
   const { data, error } = await supabase
     .from("zonas")
-    .select(COLUMNAS)
+    .select(COLUMNAS_CON_HORARIO)
     .eq("slug", slug)
     .maybeSingle();
 

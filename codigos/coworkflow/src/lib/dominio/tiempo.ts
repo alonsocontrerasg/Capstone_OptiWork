@@ -5,9 +5,10 @@
  * API pública mínima, la que realmente usa el dashboard:
  * - `horaLocalEnZona` → hora 0..23 de cada snapshot (curva de hoy, construida en el servidor).
  * - `horaDeTexto` → convierte `zonas.hora_apertura` / `hora_cierre` (`time` de Postgres).
- * - `horarioDelDia` → horario del día en minutos locales (o `null` si ese día no abre). Es la
- *   ÚNICA entrada de horario para `textoEstadoHorario` y para el «mejor momento»: hoy devuelve
- *   el horario único de la zona y se reemplazará por el horario semanal sin cambiar firmas.
+ * - `horarioDelDia` → horario del día en minutos locales (o `null` si ese día no abre). Con
+ *   `horarios_zona` usa la fila del día ISO y devuelve `null` si ese día no tiene fila; sin filas
+ *   semanales cae al horario único `hora_apertura`/`hora_cierre`. Es la ÚNICA entrada de horario
+ *   para `textoEstadoHorario` y para el «mejor momento».
  * - `textoEstadoHorario` → «Abierto hasta las HH:MM» / «Cerrado · abre …», con minutos.
  * - `diaSemanaEnZona` → día ISO 1..7, la misma convención que `ocupacion_por_franja`.
  * - `limitesRangoDias` → límites representativos para `permanencia_promedio` y
@@ -361,21 +362,45 @@ export function diaSemanaEnZona(
 /** Horario de un día en minutos locales desde medianoche (0..1440). */
 export type HorarioDia = { apertura: number; cierre: number };
 
+/** Fila de `public.horarios_zona`: `dia_semana` ISO 8601 (1 = lunes … 7 = domingo). */
+export type HorarioSemanalDia = {
+  dia_semana: number;
+  apertura: string;
+  cierre: string;
+};
+
 /** Datos mínimos de una zona para resolver su horario. */
 export type ZonaHorario = {
   hora_apertura: string;
   hora_cierre: string;
   timezone: string;
+  /** Horario semanal (migración 10); sin filas se usa el horario único de la zona. */
+  horarios_zona?: readonly HorarioSemanalDia[];
 };
 
+/** Valida un par `apertura`/`cierre` y lo convierte a minutos locales. */
+function horarioDesdeTextos(
+  aperturaTexto: string,
+  cierreTexto: string,
+): HorarioDia | null {
+  const apertura = minutosDeHoraTexto(aperturaTexto);
+  const cierre = minutosDeHoraTexto(cierreTexto);
+  if (apertura === null || cierre === null) return null;
+  if (apertura < 0 || apertura >= cierre || cierre > HORAS_POR_DIA * 60) {
+    return null;
+  }
+
+  return { apertura, cierre };
+}
+
 /**
- * Horario de la zona para el día de `instante`, en minutos locales, o `null` si ese día
- * está cerrado.
+ * Horario de la zona para el día de `instante`, en minutos locales, o `null` si ese día está
+ * cerrado.
  *
- * **Limitación actual:** el esquema todavía tiene un único `hora_apertura`/`hora_cierre`
- * por zona (no hay horario semanal), así que hoy devuelve ese horario para cualquier día.
- * Cuando llegue la migración del horario semanal, esta función es el único punto a cambiar:
- * `instante` ya se recibe (y se valida) para que la firma no se mueva.
+ * Con horario semanal (`horarios_zona`) manda la fila del día ISO local —la misma convención
+ * `isodow` 1 = lunes que `diaSemanaEnZona` y `ocupacion_por_franja`— y un día sin fila está
+ * cerrado. Una zona sin filas conserva el horario único `hora_apertura`/`hora_cierre`
+ * (compatibilidad con zonas anteriores a la migración 10).
  */
 export function horarioDelDia(
   zona: ZonaHorario,
@@ -384,14 +409,16 @@ export function horarioDelDia(
   // Falla cerrado si la zona horaria o el instante no son válidos.
   if (!fechaCivilEnZona(instante, zona.timezone)) return null;
 
-  const apertura = minutosDeHoraTexto(zona.hora_apertura);
-  const cierre = minutosDeHoraTexto(zona.hora_cierre);
-  if (apertura === null || cierre === null) return null;
-  if (apertura < 0 || apertura >= cierre || cierre > HORAS_POR_DIA * 60) {
-    return null;
+  const semanal = zona.horarios_zona;
+  if (semanal && semanal.length > 0) {
+    const dia = diaSemanaEnZona(instante, zona.timezone);
+    if (dia === null) return null;
+
+    const fila = semanal.find((horario) => horario.dia_semana === dia);
+    return fila ? horarioDesdeTextos(fila.apertura, fila.cierre) : null;
   }
 
-  return { apertura, cierre };
+  return horarioDesdeTextos(zona.hora_apertura, zona.hora_cierre);
 }
 
 /** «Lunes», «Martes»… de un instante en la zona; `null` si el motor no resuelve la zona. */
@@ -423,12 +450,14 @@ const MAX_DIAS_PROXIMA_APERTURA = 7;
 
 /**
  * Estado del horario en lenguaje natural, con minutos: «Abierto hasta las 18:00»,
- * «Cerrado · abre a las 08:30» o «Cerrado · abre mañana a las 08:30».
+ * «Cerrado · abre a las 08:30», «Cerrado · abre mañana a las 08:30» o
+ * «Cerrado · abre el lunes a las 08:30».
  *
- * - Usa SOLO `horarioDelDia` (nunca `hora_apertura`/`hora_cierre` directamente), para que el
- *   futuro horario semanal no obligue a tocar esta función.
+ * - Usa SOLO `horarioDelDia` (nunca `hora_apertura`/`hora_cierre` directamente): el horario
+ *   semanal de la migración 10 se resuelve ahí, sin tocar esta función.
  * - Si hoy ya cerró o el día está cerrado, busca el próximo día abierto como máximo 7 días
- *   hacia adelante; si ninguno abre, devuelve `null` y la UI omite la línea.
+ *   hacia adelante; si ninguno abre, devuelve `null` y la UI omite la línea. A más de un día de
+ *   distancia se nombra el día («el lunes»); al día siguiente, «mañana».
  * - Un horario inválido o una zona horaria desconocida también devuelven `null` (falla
  *   cerrado: mejor no mostrar nada que afirmar un horario que no se pudo leer).
  */
@@ -472,10 +501,14 @@ export function textoEstadoHorario(
     if (!apertura) return null;
 
     const cuando =
-      salto === 1 ? "mañana" : nombreDiaEnZona(mediodia, zona.timezone);
+      salto === 1
+        ? "mañana"
+        : nombreDiaEnZona(mediodia, zona.timezone)?.toLowerCase();
     if (!cuando) return null;
 
-    return `Cerrado · abre ${cuando} a las ${apertura}`;
+    return salto === 1
+      ? `Cerrado · abre mañana a las ${apertura}`
+      : `Cerrado · abre el ${cuando} a las ${apertura}`;
   }
 
   return null;

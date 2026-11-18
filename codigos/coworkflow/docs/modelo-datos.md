@@ -19,13 +19,15 @@ Supabase, **en orden de nombre de archivo**, y al final se ejecuta `verificacion
 | 7 | `20261106000006_pg_cron_jobs.sql` | snapshots, cierre automático, resumen diario y retención |
 | 8 | `20261110000000_consentimiento_y_scan.sql` | Etapa 3: `sin_consentimiento`, RPC `registrar_consentimiento` y `registrar_scan` con gate de consentimiento |
 | 9 | `20261111000000_dashboard_agregados.sql` | Etapa 5: agregados del dashboard (`ocupacion_por_franja` y `ocupacion_hoy`) sobre `snapshots_ocupacion`, sin PII |
+| 10 | `20261118000000_horario_semanal.sql` | Etapa 6b: horario semanal (`horarios_zona`), `zona_abierta_en` y `ocupacion_por_franja` resuelta por el día de cada snapshot |
 
 > ⚠️ La migración 8 empieza con un `alter type ... add value` **aislado**: hay que seleccionarlo y
 > ejecutarlo solo, y después el resto del archivo. Postgres no permite usar un valor nuevo de un enum
 > dentro de la misma transacción en la que se agrega.
 
 Luego, en el SQL Editor:
-1. `supabase/seed.sql` → crea la zona `hub-providencia` (aforo 100, umbrales 40/80).
+1. `supabase/seed.sql` → crea la zona `hub-providencia` (aforo 100, umbrales 40/80) y, después de
+   la migración 10, su horario semanal (lun–jue 08:30–18:00, vie 08:30–17:00).
 2. `supabase/verificacion.sql` → confirma RLS, políticas, privilegios, funciones, Realtime y cron.
 
 ## Extensiones
@@ -73,6 +75,22 @@ Luego, en el SQL Editor:
 
 Checks: `zonas_umbrales_orden (umbral_bajo < umbral_alto)` y
 `zonas_horario_orden (hora_apertura < hora_cierre)` (el horario no cruza medianoche).
+
+### `horarios_zona` (migración 10, Etapa 6b)
+| Columna | Tipo | Notas |
+|---------|------|-------|
+| `zona_id` | `uuid` | `references zonas(id) on delete cascade`; parte de la PK |
+| `dia_semana` | `smallint` | `check 1..7`, ISO 8601: 1 = lunes … 7 = domingo (igual que `extract(isodow)`) |
+| `apertura` | `time` | |
+| `cierre` | `time` | |
+
+PK `(zona_id, dia_semana)`; check `horarios_zona_orden (apertura < cierre)`. RLS con lectura
+pública (`anon`, `authenticated`) y escritura solo admin (`es_admin()`), con los mismos privilegios
+de tabla que `zonas`. **Regla de compatibilidad:** un día **sin fila** está cerrado; una zona **sin
+ninguna fila** sigue usando `zonas.hora_apertura`/`hora_cierre`, así que las zonas anteriores a la
+migración 10 no necesitan cambios. `zona_abierta_en(uuid, timestamptz)` resuelve el día local y
+`zona_abierta(uuid)` es su wrapper con `now()`; `ocupacion_por_franja` compara cada snapshot con el
+horario de su día (detalle en S-45).
 
 ### `sesiones`
 | Columna | Tipo | Notas |
@@ -213,7 +231,7 @@ Todas son `SECURITY DEFINER` con `search_path` fijo. Se revoca `EXECUTE` a
 | `personas_distintas(...)` | ✓ | ✓ | estadística pública (`count(distinct user_id)`) |
 | `ocupacion_por_franja(uuid, integer)` | ✓ | ✓ | agregado público día ISO × hora (solo snapshots, 7 o 30 días) |
 | `ocupacion_hoy(uuid)` | ✓ | ✓ | snapshots del día local actual (máx. 300, solo agregados) |
-| `handle_new_user`, `proteger_rol`, `validar_timezone_zona`, `refrescar_ocupacion`, `crear_ocupacion_inicial`, `actualizar_ocupacion`, `obtener_secreto_qr`, `zona_abierta`, `cron_*` | ✗ | ✗ | solo trigger/cron/RPC interno |
+| `handle_new_user`, `proteger_rol`, `validar_timezone_zona`, `refrescar_ocupacion`, `crear_ocupacion_inicial`, `actualizar_ocupacion`, `obtener_secreto_qr`, `zona_abierta_en`, `zona_abierta`, `cron_*` | ✗ | ✗ | solo trigger/cron/RPC interno |
 
 `service_role` ya tiene `EXECUTE` en `refrescar_ocupacion(uuid)` por los privilegios por defecto
 de Supabase (verificado con `has_function_privilege` el 2026-11-11); la migración 9 no lo
@@ -380,6 +398,31 @@ En **Authentication → Providers → Email**:
 
 Rutas que expone la app en esta etapa: `/login`, `/auth/callback`, `/auth/signout` (solo `POST`),
 `/api/consentimiento` (`POST`), `/qr` y `/api/qr/token` (`GET`, solo admin).
+
+### 3d. Aplicar la migración 10 (horario semanal)
+
+1. Pega `20261118000000_horario_semanal.sql` completo: crea `horarios_zona`, su RLS y la función
+   `zona_abierta_en`, redefine `zona_abierta` como wrapper y actualiza `ocupacion_por_franja`.
+   Es idempotente.
+2. Pega el **bloque de horario semanal de `supabase/seed.sql`** (desde
+   `-- Horario semanal de hub-providencia` hasta el `on conflict ... do update`): fija
+   `hora_apertura = '08:30'`/`hora_cierre = '18:00'` en `zonas` (rango unión y fallback) e inserta
+   las 5 filas de `horarios_zona` (lun–jue `08:30–18:00`, vie `08:30–17:00`). También es
+   idempotente: volver a ejecutarlo actualiza las mismas filas.
+3. Verifica:
+
+```sql
+select dia_semana, apertura, cierre
+from public.horarios_zona h
+join public.zonas z on z.id = h.zona_id
+where z.slug = 'hub-providencia'
+order by dia_semana;  -- 5 filas: 1..4 08:30-18:00, 5 08:30-17:00
+
+select public.zona_abierta((select id from public.zonas where slug = 'hub-providencia'));
+```
+
+Una zona **sin** filas en `horarios_zona` sigue usando el horario único de `zonas`; un día sin
+fila está cerrado (ver S-45 en `docs/decisiones-seguridad.md`).
 
 ### 4. Verificar
 Ejecuta `supabase/verificacion.sql`. Debe terminar con `NOTICE: Verificación OK ...`.
