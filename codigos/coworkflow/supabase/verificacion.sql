@@ -1,6 +1,6 @@
 -- ============================================================
--- CoworkFlow · verificacion.sql — Etapa 2 (ampliado en Etapa 5)
--- Ejecutar en el SQL Editor DESPUÉS de aplicar las 9 migraciones y el seed.
+-- CoworkFlow · verificacion.sql — Etapa 2 (ampliado en Etapas 5 y 6b)
+-- Ejecutar en el SQL Editor DESPUÉS de aplicar las 10 migraciones y el seed.
 -- Corre como postgres. Si todo está bien termina con:
 --   NOTICE: Verificación OK ...
 -- Si algo falla, lanza una excepción listando los problemas encontrados.
@@ -22,6 +22,7 @@ declare
   v_proc     record;
   v_zona     uuid;
   v_acl      aclitem[];
+  v_timezone_test text;
   -- Lista blanca de funciones que pueden tener EXECUTE para anon y/o authenticated.
   -- Quién exactamente (solo authenticated vs anon+authenticated) lo valida el bloque 10).
   v_permitidas oid[] := array[
@@ -34,9 +35,9 @@ declare
     to_regprocedure('public.ocupacion_hoy(uuid)')
   ];
 begin
-  -- 1) RLS activa en las 8 tablas
+  -- 1) RLS activa en las 9 tablas
   foreach v_tabla in array array[
-    'profiles','zonas','sesiones','eventos_scan',
+    'profiles','zonas','horarios_zona','sesiones','eventos_scan',
     'ocupacion_actual','snapshots_ocupacion','resumen_diario','app_secrets'
   ] loop
     if not exists (
@@ -56,12 +57,12 @@ begin
                       'snapshots_ocupacion','resumen_diario','app_secrets')
     and cmd in ('INSERT','UPDATE','DELETE','ALL');
   if v_total > 0 then
-    v_errores := v_errores || format('%s políticas de escritura inesperadas (solo zonas debe tener)', v_total);
+    v_errores := v_errores || format('%s políticas de escritura inesperadas (solo zonas y horarios_zona deben tener)', v_total);
   end if;
 
   -- 3) Políticas de lectura esperadas presentes
   foreach v_tabla in array array[
-    'profiles','zonas','sesiones','eventos_scan',
+    'profiles','zonas','horarios_zona','sesiones','eventos_scan',
     'ocupacion_actual','snapshots_ocupacion','resumen_diario'
   ] loop
     if not exists (select 1 from pg_policies
@@ -76,6 +77,15 @@ begin
     v_errores := v_errores || 'Falta política INSERT (admin) en zonas'::text;
   end if;
 
+  -- 4b) horarios_zona: escritura solo admin (INSERT/UPDATE/DELETE bajo RLS)
+  foreach v_priv in array array['INSERT', 'UPDATE', 'DELETE'] loop
+    if not exists (select 1 from pg_policies
+                   where schemaname = 'public' and tablename = 'horarios_zona'
+                     and cmd = v_priv) then
+      v_errores := v_errores || format('Falta política %s (admin) en horarios_zona', v_priv);
+    end if;
+  end loop;
+
   -- 5) profiles: sin privilegio UPDATE sobre "rol" para anon/authenticated
   if has_column_privilege('anon', 'public.profiles', 'rol', 'UPDATE') then
     v_errores := v_errores || 'anon tiene UPDATE sobre profiles.rol'::text;
@@ -85,8 +95,9 @@ begin
   end if;
 
   -- 5b) Privilegios de escritura de tabla: anon no escribe NUNCA (ni TRUNCATE) y
-  --     authenticated solo escribe en zonas (insert/update/delete), nunca TRUNCATE.
-  --     Se recorren todas las tablas reales de public para que también cubra tablas futuras.
+  --     authenticated solo escribe en zonas y horarios_zona (insert/update/delete),
+  --     nunca TRUNCATE. Se recorren todas las tablas reales de public para que también
+  --     cubra tablas futuras.
   for v_rel in
     select c.oid, c.relname
     from pg_class c
@@ -100,9 +111,9 @@ begin
         v_errores := v_errores || format('anon tiene %s sobre public.%s', v_priv, v_rel.relname);
       end if;
       if v_priv <> 'TRUNCATE'
-         and v_rel.relname <> 'zonas'
+         and v_rel.relname not in ('zonas', 'horarios_zona')
          and has_table_privilege('authenticated', v_rel.oid, v_priv) then
-        v_errores := v_errores || format('authenticated tiene %s sobre public.%s (solo zonas admite escritura)', v_priv, v_rel.relname);
+        v_errores := v_errores || format('authenticated tiene %s sobre public.%s (solo zonas y horarios_zona admiten escritura)', v_priv, v_rel.relname);
       end if;
     end loop;
 
@@ -212,6 +223,7 @@ begin
     'public.es_admin()',
     'public.obtener_secreto_qr()',
     'public.zona_abierta(uuid)',
+    'public.zona_abierta_en(uuid,timestamptz)',
     'public.registrar_scan(text)',
     'public.registrar_consentimiento(integer)',
     'public.permanencia_promedio(uuid,timestamptz,timestamptz)',
@@ -368,12 +380,58 @@ begin
     end if;
   end if;
 
+  -- 15b) Horario semanal (Etapa 6b): zona_abierta_en con instantes fijos (determinista,
+  --      sin depender de now()) y mapa de calor sin sábado/domingo. Requiere el bloque
+  --      de horario semanal de hub-providencia que está en seed.sql.
+  select z.id, z.timezone into v_zona, v_timezone_test
+  from public.zonas z
+  where z.slug = 'hub-providencia';
+
+  if v_zona is null then
+    raise notice 'AVISO: no existe hub-providencia; se omiten las pruebas de horario semanal.';
+  elsif not exists (select 1 from public.horarios_zona h where h.zona_id = v_zona) then
+    raise notice 'AVISO: hub-providencia no tiene filas en horarios_zona; ejecuta el bloque de seed de la Etapa 6b para probar el horario semanal.';
+  else
+    -- 2026-11-16 es lunes · 19 jueves · 20 viernes · 21 sábado · 22 domingo.
+    -- `::timestamp at time zone v_timezone_test` arma el instante desde la hora local
+    -- de la zona (robusto ante cambios de horario de verano).
+    if public.zona_abierta_en(v_zona, '2026-11-16 08:29:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: lunes 08:29 debería estar cerrado'::text;
+    end if;
+    if not public.zona_abierta_en(v_zona, '2026-11-16 08:30:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: lunes 08:30 debería estar abierto'::text;
+    end if;
+    if not public.zona_abierta_en(v_zona, '2026-11-19 17:59:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: jueves 17:59 debería estar abierto'::text;
+    end if;
+    if not public.zona_abierta_en(v_zona, '2026-11-20 16:59:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: viernes 16:59 debería estar abierto'::text;
+    end if;
+    if public.zona_abierta_en(v_zona, '2026-11-20 17:00:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: viernes 17:00 debería estar cerrado'::text;
+    end if;
+    if public.zona_abierta_en(v_zona, '2026-11-21 10:00:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: sábado 10:00 debería estar cerrado'::text;
+    end if;
+    if public.zona_abierta_en(v_zona, '2026-11-22 10:00:00'::timestamp at time zone v_timezone_test) then
+      v_errores := v_errores || 'zona_abierta_en: domingo 10:00 debería estar cerrado'::text;
+    end if;
+
+    -- El fin de semana está cerrado: el mapa de calor no puede devolver dow 6 ni 7.
+    select count(*) into v_total
+    from public.ocupacion_por_franja(v_zona, 30) f
+    where f.dow in (6, 7);
+    if v_total > 0 then
+      v_errores := v_errores || format('ocupacion_por_franja con p_dias=30 devolvió %s franjas de sábado/domingo (debe ser 0)', v_total);
+    end if;
+  end if;
+
   -- Resultado
   if array_length(v_errores, 1) > 0 then
     raise exception 'Verificación FALLÓ (% problemas):%  %',
       array_length(v_errores, 1), E'\n - ', array_to_string(v_errores, E'\n - ');
   end if;
 
-  raise notice 'Verificación OK: RLS, políticas, privilegios, funciones, agregados del dashboard, Realtime y cron correctos.';
+  raise notice 'Verificación OK: RLS, políticas, privilegios, funciones, horario semanal, agregados del dashboard, Realtime y cron correctos.';
 end $$;
 
