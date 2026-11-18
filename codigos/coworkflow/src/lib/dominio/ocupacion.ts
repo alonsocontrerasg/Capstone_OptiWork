@@ -132,6 +132,21 @@ export function etiquetaEstado(estado: EstadoOcupacion): string {
   return ETIQUETAS_ESTADO[estado];
 }
 
+/**
+ * Frase corta y legible del estado, para la tarjeta principal del dashboard.
+ * Acompaña al color: el estado nunca se comunica solo con color (WCAG 1.4.1).
+ */
+const FRASES_ESTADO: Record<EstadoOcupacion, string> = {
+  bajo: "Hay espacio",
+  moderado: "Algo concurrido",
+  lleno: "Casi lleno",
+  desconocido: "Sin lectura",
+};
+
+export function fraseEstado(estado: EstadoOcupacion): string {
+  return FRASES_ESTADO[estado];
+}
+
 export function formatearPorcentaje(porcentaje: number | null): string {
   if (
     porcentaje === null ||

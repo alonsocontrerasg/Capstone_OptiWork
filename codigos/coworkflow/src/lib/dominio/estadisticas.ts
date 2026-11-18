@@ -1,4 +1,12 @@
-import { horaLocalEnZona } from "@/lib/dominio/tiempo";
+import {
+  calcularEstado,
+  type ConfiguracionAforo,
+} from "@/lib/dominio/ocupacion";
+import {
+  formatearHoraEnMinutos,
+  horaLocalEnZona,
+  type HorarioDia,
+} from "@/lib/dominio/tiempo";
 
 /**
  * Agregaciones PURAS del dashboard (sin React, Supabase ni next/*) para probarlas con
@@ -284,6 +292,189 @@ export function horasDelHorario(horario: HorarioZona | null): number[] {
   const horas: number[] = [];
   for (let hora = apertura; hora < cierre; hora += 1) horas.push(hora);
   return horas;
+}
+
+/**
+ * Horas (0..23) que cubre un horario con minutos (`{ 08:30, 18:00 }` → `[8 … 17]`).
+ *
+ * Usa `floor` para la apertura y `ceil` para el cierre porque `ocupacion_por_franja`
+ * agrupa por hora local: un snapshot de las 08:45 cae en la fila `hora = 8`. Un horario
+ * ausente o incoherente devuelve el día completo, igual que `horasDelHorario`.
+ */
+export function horasDelHorarioEnMinutos(
+  horario: HorarioDia | null,
+): number[] {
+  const valido =
+    horario !== null &&
+    Number.isInteger(horario.apertura) &&
+    Number.isInteger(horario.cierre) &&
+    horario.apertura >= 0 &&
+    horario.apertura < HORAS_POR_DIA * 60 &&
+    horario.cierre > horario.apertura &&
+    horario.cierre <= HORAS_POR_DIA * 60;
+
+  const apertura = valido ? Math.floor(horario.apertura / 60) : 0;
+  const cierre = valido ? Math.ceil(horario.cierre / 60) : HORAS_POR_DIA;
+
+  const horas: number[] = [];
+  for (let hora = apertura; hora < cierre; hora += 1) horas.push(hora);
+  return horas;
+}
+
+/**
+ * Promedio de ocupación por hora (0..23) para un día ISO (`dow` 1..7), ponderado por
+ * `muestras`. Hora sin datos → `null`, nunca 0.
+ */
+export function promedioPorHoraDelDia(
+  filas: readonly FilaFranja[],
+  dow: number,
+): (number | null)[] {
+  const sumas = new Array<number>(HORAS_POR_DIA).fill(0);
+  const conteos = new Array<number>(HORAS_POR_DIA).fill(0);
+
+  for (const fila of filas) {
+    const normalizada = normalizarFila(fila);
+    if (!normalizada || normalizada.dow !== dow) continue;
+
+    sumas[normalizada.hora] += normalizada.promedio * normalizada.muestras;
+    conteos[normalizada.hora] += normalizada.muestras;
+  }
+
+  return sumas.map((suma, hora) =>
+    conteos[hora] > 0 ? suma / conteos[hora] : null,
+  );
+}
+
+/** Tramo de horas tranquilas; `fin` es inclusivo (horas locales 0..23). */
+export type TramoHorario = { inicio: number; fin: number };
+
+/**
+ * Porcentaje de aforo de un PROMEDIO (puede ser decimal), o `null` si no es calculable.
+ *
+ * No se reutiliza `calcularPorcentaje`: esa función exige una cantidad entera (es la que
+ * valida el contador en vivo y las cifras de `ocupacion_actual`), así que un promedio por
+ * hora como `33.4` siempre devolvería `null` y ninguna hora sería «tranquila».
+ */
+function porcentajeDePromedio(
+  promedio: number,
+  aforoMax: number,
+): number | null {
+  if (!Number.isFinite(promedio) || promedio < 0) return null;
+  if (!Number.isFinite(aforoMax) || aforoMax <= 0) return null;
+  return (promedio / aforoMax) * 100;
+}
+
+/**
+ * Tramos de horas tranquilas de un día ISO, dentro del horario de la zona.
+ *
+ * Una hora es tranquila solo si TIENE datos y `calcularEstado` la clasifica como «bajo».
+ * `umbral_bajo`/`umbral_alto` son porcentajes del aforo (no personas): por eso se reutiliza
+ * `calcularEstado(porcentajeDePromedio(promedio, aforo_max), zona)`. Las horas sin datos
+ * cortan el tramo (no se asumen tranquilas) y los tramos consecutivos se fusionan.
+ */
+export function tramosTranquilos(
+  filas: readonly FilaFranja[],
+  dow: number,
+  zona: ConfiguracionAforo,
+  horario: HorarioDia | null,
+): TramoHorario[] {
+  if (!Number.isInteger(dow) || dow < 1 || dow > DIAS_POR_SEMANA) return [];
+
+  const promedios = promedioPorHoraDelDia(filas, dow);
+  const horas = horasDelHorarioEnMinutos(horario);
+  const tramos: TramoHorario[] = [];
+  let inicio: number | null = null;
+  let ultimaHora: number | null = null;
+
+  for (const hora of horas) {
+    ultimaHora = hora;
+    const promedio = promedios[hora];
+    const tranquila =
+      promedio !== null &&
+      calcularEstado(porcentajeDePromedio(promedio, zona.aforo_max), zona) ===
+        "bajo";
+
+    if (tranquila) {
+      if (inicio === null) inicio = hora;
+      continue;
+    }
+
+    if (inicio !== null) {
+      tramos.push({ inicio, fin: hora - 1 });
+      inicio = null;
+    }
+  }
+
+  if (inicio !== null && ultimaHora !== null) {
+    tramos.push({ inicio, fin: ultimaHora });
+  }
+
+  return tramos;
+}
+
+/** Minúscula inicial para las frases que siguen al primer « o » del texto. */
+function enMinuscula(texto: string): string {
+  return texto.charAt(0).toLocaleLowerCase("es") + texto.slice(1);
+}
+
+/**
+ * Texto de los tramos para la tarjeta «Mejor momento»: «Antes de las 10:00»,
+ * «Desde las 16:00», «De 11:00 a 13:00» o «A cualquier hora», unidos con « o ».
+ * Solo la primera frase lleva mayúscula inicial; las siguientes van en minúscula
+ * («Antes de las 10:00 o desde las 15:00»).
+ * Sin tramos → `null` (la tarjeta no se muestra).
+ */
+export function textoMejorMomento(
+  tramos: readonly TramoHorario[],
+  horario: HorarioDia | null,
+): string | null {
+  if (tramos.length === 0) return null;
+
+  const horas = horasDelHorarioEnMinutos(horario);
+  if (horas.length === 0) return null;
+
+  const primera = horas[0];
+  const ultima = horas[horas.length - 1];
+  const textos: string[] = [];
+
+  for (const tramo of tramos) {
+    if (
+      !Number.isInteger(tramo.inicio) ||
+      !Number.isInteger(tramo.fin) ||
+      tramo.fin < tramo.inicio
+    ) {
+      continue;
+    }
+
+    const arrancaEnApertura = tramo.inicio <= primera;
+    const llegaAlCierre = tramo.fin >= ultima;
+
+    if (arrancaEnApertura && llegaAlCierre) {
+      textos.push("A cualquier hora");
+      continue;
+    }
+
+    if (arrancaEnApertura) {
+      const hasta = formatearHoraEnMinutos((tramo.fin + 1) * 60);
+      if (hasta) textos.push(`Antes de las ${hasta}`);
+      continue;
+    }
+
+    if (llegaAlCierre) {
+      const desde = formatearHoraEnMinutos(tramo.inicio * 60);
+      if (desde) textos.push(`Desde las ${desde}`);
+      continue;
+    }
+
+    const desde = formatearHoraEnMinutos(tramo.inicio * 60);
+    const hasta = formatearHoraEnMinutos((tramo.fin + 1) * 60);
+    if (desde && hasta) textos.push(`De ${desde} a ${hasta}`);
+  }
+
+  const [primero, ...resto] = textos;
+  if (primero === undefined) return null;
+
+  return [primero, ...resto.map(enMinuscula)].join(" o ");
 }
 
 /** Redondeo a 1 decimal: el payload del cliente no lleva precisión de `double precision`. */

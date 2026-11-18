@@ -18,9 +18,9 @@ import {
  *   celda es el promedio ponderado por `muestras`, o `null` si no hubo snapshots.
  * - Accesibilidad: `caption` sr-only, `scope="col"`/`scope="row"` en los encabezados y el
  *   número escrito en cada celda (el color nunca es la única señal). Celda sin datos = «—».
- * - Los cinco niveles de color salen de UNA sola gama (azul) y se escriben como clases
- *   Tailwind literales: Tailwind busca cadenas completas en el código, así que armar
- *   `bg-blue-${n}` por interpolación no generaría los estilos.
+ * - Los cinco niveles de color salen de UNA sola gama (la marca del sitio) y se escriben
+ *   como clases Tailwind literales: Tailwind busca cadenas completas en el código, así que
+ *   armar `bg-marca/${n}` por interpolación no generaría los estilos.
  * - Si la RPC falló (`filas === null`) solo esta tarjeta muestra su aviso: el resto de la
  *   página sigue funcionando.
  */
@@ -28,15 +28,14 @@ import {
 type Nivel = 1 | 2 | 3 | 4 | 5;
 
 const CLASES_NIVEL: Record<Nivel, string> = {
-  1: "bg-blue-50 text-blue-900 dark:bg-blue-950 dark:text-blue-200",
-  2: "bg-blue-100 text-blue-900 dark:bg-blue-900 dark:text-blue-100",
-  3: "bg-blue-300 text-blue-950 dark:bg-blue-700 dark:text-white",
-  4: "bg-blue-600 text-white dark:bg-blue-400 dark:text-blue-950",
-  5: "bg-blue-800 text-white dark:bg-blue-300 dark:text-blue-950",
+  1: "bg-marca-suave text-marca-oscura",
+  2: "bg-marca/20 text-tinta",
+  3: "bg-marca/45 text-tinta",
+  4: "bg-marca text-white",
+  5: "bg-marca-oscura text-white",
 };
 
-const CLASES_SIN_DATO =
-  "bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400";
+const CLASES_SIN_DATO = "bg-fondo text-tenue";
 
 const NIVELES: { nivel: Nivel; etiqueta: string }[] = [
   { nivel: 1, etiqueta: "menos de 20 % del aforo" },
@@ -77,24 +76,21 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
     matriz.some((fila) => fila.some((valor) => valor !== null));
 
   return (
-    <article
-      aria-labelledby="mapa-calor-titulo"
-      className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950"
-    >
+    <article aria-labelledby="mapa-calor-titulo" className="tarjeta">
       <h3 id="mapa-calor-titulo" className="text-sm font-semibold">
         Mapa de calor día × hora
       </h3>
-      <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+      <p className="mt-1 text-xs leading-5 text-tenue">
         Promedio de personas dentro por día de la semana y hora, sobre los
         últimos 30 días. El color resume el % del aforo ({aforoMax} personas).
       </p>
 
       {matriz === null ? (
-        <p className="mt-4 text-sm font-medium text-red-600 dark:text-red-400">
+        <p className="mt-4 text-sm font-medium text-lleno-texto">
           No se pudo cargar el mapa de calor.
         </p>
       ) : !hayDatos ? (
-        <p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-sm leading-6 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+        <p className="mt-4 rounded-xl border border-dashed border-borde p-4 text-sm leading-6 text-tenue">
           Todavía no hay lecturas automáticas suficientes para dibujar el mapa
           de calor. Aparecerá cuando el sistema registre snapshots de
           ocupación.
@@ -114,7 +110,7 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
                 <tr>
                   <th
                     scope="col"
-                    className="px-2 py-1.5 text-left font-semibold text-zinc-600 dark:text-zinc-400"
+                    className="px-2 py-1.5 text-left font-semibold text-tenue"
                   >
                     Día
                   </th>
@@ -122,7 +118,7 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
                     <th
                       key={hora}
                       scope="col"
-                      className="px-2 py-1.5 text-center font-medium text-zinc-600 dark:text-zinc-400"
+                      className="px-2 py-1.5 text-center font-medium text-tenue"
                     >
                       {etiquetaHora(hora)}
                     </th>
@@ -134,7 +130,7 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
                   <tr key={DIAS_SEMANA[indiceDia]}>
                     <th
                       scope="row"
-                      className="whitespace-nowrap px-2 py-1.5 text-left font-medium text-zinc-700 dark:text-zinc-300"
+                      className="whitespace-nowrap px-2 py-1.5 text-left font-medium text-tinta"
                     >
                       {DIAS_SEMANA[indiceDia]}
                     </th>
@@ -164,12 +160,12 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
             </table>
           </div>
 
-          <ul className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-600 dark:text-zinc-400">
+          <ul className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-tenue">
             {NIVELES.map(({ nivel, etiqueta }) => (
               <li key={nivel} className="flex items-center gap-1.5">
                 <span
                   aria-hidden="true"
-                  className={`size-3.5 rounded-sm ring-1 ring-zinc-400/40 ring-inset dark:ring-zinc-600 ${CLASES_NIVEL[nivel]}`}
+                  className={`size-3.5 rounded-sm ring-1 ring-borde ring-inset ${CLASES_NIVEL[nivel]}`}
                 />
                 {etiqueta}
               </li>
@@ -177,7 +173,7 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
             <li className="flex items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className={`size-3.5 rounded-sm ring-1 ring-zinc-400/40 ring-inset dark:ring-zinc-600 ${CLASES_SIN_DATO}`}
+                className={`size-3.5 rounded-sm ring-1 ring-borde ring-inset ${CLASES_SIN_DATO}`}
               />
               sin datos
             </li>

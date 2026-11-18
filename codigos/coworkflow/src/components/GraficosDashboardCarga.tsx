@@ -35,7 +35,7 @@ function EsqueletoGraficos() {
       {[0, 1].map((indice) => (
         <div
           key={indice}
-          className="h-72 animate-pulse rounded-2xl border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900"
+          className="h-72 animate-pulse rounded-[20px] border border-borde bg-superficie"
         />
       ))}
     </div>

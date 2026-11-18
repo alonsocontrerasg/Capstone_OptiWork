@@ -31,26 +31,22 @@ type ConfiguracionEstado = {
 const CONFIGURACION: Record<EstadoOcupacion, ConfiguracionEstado> = {
   bajo: {
     Icono: CircleCheck,
-    clases:
-      "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100",
+    clases: "border-bajo bg-bajo-fondo text-bajo-texto",
     descripcion: "Hay espacio disponible",
   },
   moderado: {
     Icono: TriangleAlert,
-    clases:
-      "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100",
+    clases: "border-moderado bg-moderado-fondo text-moderado-texto",
     descripcion: "La ocupación está cerca del límite",
   },
   lleno: {
     Icono: CircleX,
-    clases:
-      "border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100",
+    clases: "border-lleno bg-lleno-fondo text-lleno-texto",
     descripcion: "El aforo está completo",
   },
   desconocido: {
     Icono: CircleHelp,
-    clases:
-      "border-zinc-300 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300",
+    clases: "border-borde bg-fondo text-tenue",
     descripcion: "No hay una lectura disponible",
   },
 };

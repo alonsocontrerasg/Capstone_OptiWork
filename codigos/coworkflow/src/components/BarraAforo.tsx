@@ -16,10 +16,10 @@ import type { EstadoOcupacion } from "@/lib/dominio/ocupacion";
 const SEGMENTOS_AFORO = 20;
 
 const COLOR_SEGMENTO: Record<EstadoOcupacion, string> = {
-  bajo: "bg-emerald-500",
-  moderado: "bg-amber-500",
-  lleno: "bg-red-500",
-  desconocido: "bg-zinc-400",
+  bajo: "bg-bajo",
+  moderado: "bg-moderado",
+  lleno: "bg-lleno",
+  desconocido: "bg-borde",
 };
 
 type Props = {
@@ -54,9 +54,7 @@ export function BarraAforo({ porcentaje, estado }: Props) {
           key={indice}
           aria-hidden="true"
           className={`h-2.5 flex-1 rounded-full ${
-            indice < llenos
-              ? COLOR_SEGMENTO[estado]
-              : "bg-zinc-200 dark:bg-zinc-800"
+            indice < llenos ? COLOR_SEGMENTO[estado] : "bg-borde"
           }`}
         />
       ))}

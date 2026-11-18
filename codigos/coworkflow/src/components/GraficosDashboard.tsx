@@ -37,8 +37,8 @@ import type {
  * - Cada gráfico es `role="img"` con un `aria-label` que resume el dato, y debajo va la misma
  *   información en una tabla dentro de `<details>` (el color y la forma no son la única vía).
  * - Tooltips y ejes en español; las horas se rotulan con `etiquetaHora` (`08:00`).
- * - Los colores de ejes usan `currentColor` sobre `text-zinc-600 dark:text-zinc-400`, así que
- *   mantienen contraste en tema claro y oscuro sin leer el tema desde JavaScript.
+ * - Los colores de ejes usan `currentColor` sobre `text-tenue`, así que mantienen
+ *   contraste con los tokens del sitio sin leer el tema desde JavaScript.
  * - Sin atributos `style` ni `dangerouslySetInnerHTML`.
  */
 
@@ -55,8 +55,8 @@ const FORMATO_ENTERO = new Intl.NumberFormat("es-CL");
  */
 const formatearEjeY = (valor: number): string => FORMATO_DECIMAL.format(valor);
 
-/** Azul 600: contraste ≥ 4,5:1 sobre fondo blanco y sobre zinc-950. */
-const COLOR_SERIE = "#2563eb";
+/** Marca del sitio (`--color-marca`): contraste 5,9:1 sobre `--color-superficie`. */
+const COLOR_SERIE = "#0b6e79";
 
 const ESTILO_TICK = { fill: "currentColor", fontSize: 11 } as const;
 
@@ -71,12 +71,12 @@ function TarjetaGrafico({ id, titulo, descripcion, children }: TarjetaProps) {
   return (
     <article
       aria-labelledby={id}
-      className="flex flex-col rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950"
+      className="tarjeta flex flex-col"
     >
       <h3 id={id} className="text-sm font-semibold">
         {titulo}
       </h3>
-      <p className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+      <p className="mt-1 text-xs leading-5 text-tenue">
         {descripcion}
       </p>
       <div className="mt-3 flex-1">{children}</div>
@@ -89,8 +89,8 @@ function Aviso({ texto, tono }: { texto: string; tono: "error" | "vacio" }) {
     <p
       className={`rounded-xl border border-dashed p-4 text-sm leading-6 ${
         tono === "error"
-          ? "border-red-300 text-red-700 dark:border-red-800 dark:text-red-400"
-          : "border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+          ? "border-lleno/40 text-lleno-texto"
+          : "border-borde text-tenue"
       }`}
     >
       {texto}
@@ -108,15 +108,15 @@ function ContenidoTooltipBarra({ active, payload }: ContenidoTooltipProps) {
   if (!active || !punto) return null;
 
   return (
-    <div className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs shadow-md dark:border-zinc-700 dark:bg-zinc-900">
-      <p className="font-semibold text-zinc-900 dark:text-zinc-50">
+    <div className="rounded-lg border border-borde bg-superficie px-3 py-2 text-xs shadow-md">
+      <p className="font-semibold text-tinta">
         Hora {punto.etiqueta}
       </p>
-      <p className="mt-1 text-zinc-700 dark:text-zinc-300">
+      <p className="mt-1 text-tenue">
         {FORMATO_DECIMAL.format(punto.promedio)}{" "}
         {punto.promedio === 1 ? "persona" : "personas"} en promedio
       </p>
-      <p className="text-zinc-500 dark:text-zinc-400">
+      <p className="text-tenue">
         {FORMATO_ENTERO.format(punto.muestras)} muestras
       </p>
     </div>
@@ -135,11 +135,11 @@ function ContenidoTooltipHoy({ active, payload }: ContenidoTooltipProps) {
         }`;
 
   return (
-    <div className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-xs shadow-md dark:border-zinc-700 dark:bg-zinc-900">
-      <p className="font-semibold text-zinc-900 dark:text-zinc-50">
+    <div className="rounded-lg border border-borde bg-superficie px-3 py-2 text-xs shadow-md">
+      <p className="font-semibold text-tinta">
         Hora {punto.etiqueta}
       </p>
-      <p className="mt-1 text-zinc-700 dark:text-zinc-300">{cantidad} dentro</p>
+      <p className="mt-1 text-tenue">{cantidad} dentro</p>
     </div>
   );
 }
@@ -199,12 +199,12 @@ function resumenHoy(puntos: PuntoHoraHoy[]): string {
   )} personas a las ${ultimo.etiqueta}. Las horas sin lectura quedan como huecos. Los mismos valores están en la tabla de datos que sigue.`;
 }
 
-const CLASES_CELDA = "py-1 pr-3 text-left font-semibold text-zinc-600 dark:text-zinc-400";
+const CLASES_CELDA = "py-1 pr-3 text-left font-semibold text-tenue";
 
 function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
   return (
     <details className="mt-3 text-xs">
-      <summary className="cursor-pointer font-medium text-zinc-600 dark:text-zinc-400">
+      <summary className="cursor-pointer font-medium text-tenue">
         Ver tabla de datos
       </summary>
       <div className="mt-2 overflow-x-auto">
@@ -214,7 +214,7 @@ function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
             respaldan cada promedio.
           </caption>
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-borde">
               <th scope="col" className={CLASES_CELDA}>
                 Hora
               </th>
@@ -230,11 +230,11 @@ function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
             {puntos.map((punto) => (
               <tr
                 key={punto.etiqueta}
-                className="border-b border-zinc-100 last:border-0 dark:border-zinc-900"
+                className="border-b border-borde/60 last:border-0"
               >
                 <th
                   scope="row"
-                  className="py-1 pr-3 text-left font-normal tabular-nums text-zinc-700 dark:text-zinc-300"
+                  className="py-1 pr-3 text-left font-normal tabular-nums text-tenue"
                 >
                   {punto.etiqueta}
                 </th>
@@ -256,7 +256,7 @@ function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
 function TablaHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
   return (
     <details className="mt-3 text-xs">
-      <summary className="cursor-pointer font-medium text-zinc-600 dark:text-zinc-400">
+      <summary className="cursor-pointer font-medium text-tenue">
         Ver tabla de datos
       </summary>
       <div className="mt-2 overflow-x-auto">
@@ -266,7 +266,7 @@ function TablaHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
             hora.
           </caption>
           <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <tr className="border-b border-borde">
               <th scope="col" className={CLASES_CELDA}>
                 Hora
               </th>
@@ -279,11 +279,11 @@ function TablaHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
             {puntos.map((punto) => (
               <tr
                 key={punto.etiqueta}
-                className="border-b border-zinc-100 last:border-0 dark:border-zinc-900"
+                className="border-b border-borde/60 last:border-0"
               >
                 <th
                   scope="row"
-                  className="py-1 pr-3 text-left font-normal tabular-nums text-zinc-700 dark:text-zinc-300"
+                  className="py-1 pr-3 text-left font-normal tabular-nums text-tenue"
                 >
                   {punto.etiqueta}
                 </th>
@@ -318,18 +318,19 @@ function GraficoBarras({
   dias: number;
 }) {
   /**
-   * Ticks del eje X uniformes: una etiqueta cada 2 barras si el horario tiene ≤12 horas y una
-   * cada 3 cuando tiene más. Con `interval="preserveStartEnd"` Recharts decidía según el ancho
-   * disponible y se saltaba horas de forma despareja (p. ej. 18:00 sí, 17:00 no).
+   * Eje X sin superposición a 390 px: `equidistantPreserveStart` mide cada etiqueta con
+   * `getStringSize` y sube el paso (1 de cada N) hasta que no colisionan. Con un `interval`
+   * numérico Recharts 3 devuelve `getNumberIntervalTicks` sin mirar `minTickGap`, así que 13
+   * etiquetas «HH:00» (≈31 px con `fontSize: 11`) se solapaban en los ~260 px útiles de un
+   * móvil de 390 px. El paso se recalcula al redimensionar, sin media queries en JavaScript.
    */
-  const intervaloEtiquetas = puntos.length <= 12 ? 1 : 2;
 
   return (
     <>
       <div
         role="img"
         aria-label={resumenBarras(puntos, dias)}
-        className="h-64 w-full text-zinc-600 dark:text-zinc-400"
+        className="h-64 w-full text-tenue"
       >
         <ResponsiveContainer width="100%" height="100%" debounce={50}>
           <BarChart
@@ -347,7 +348,8 @@ function GraficoBarras({
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={{ stroke: "currentColor", strokeOpacity: 0.3 }}
-              interval={intervaloEtiquetas}
+              interval="equidistantPreserveStart"
+              minTickGap={8}
             />
             <YAxis
               // Ancho reservado para que "100" o "62,5" se vean completos; sin margen negativo
@@ -379,7 +381,7 @@ function GraficoBarras({
         </ResponsiveContainer>
       </div>
       <TablaBarras puntos={puntos} />
-      <p className="mt-2 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">
+      <p className="mt-2 text-[11px] leading-5 text-tenue">
         Cada barra es el promedio de las lecturas automáticas de esa hora;
         «muestras» indica cuántas lecturas la respaldan.
       </p>
@@ -395,18 +397,17 @@ function GraficoBarras({
  */
 function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
   /**
-   * Ticks uniformes en el eje X: una sí y otra no solo cuando el eje se llena. Con
-   * `interval="preserveStartEnd"` Recharts elegía qué horas omitir según el espacio disponible y
-   * se saltaba horas sueltas (p. ej. las 18:00) de forma despareja.
+   * Mismo criterio que el gráfico de barras: `equidistantPreserveStart` mide cada etiqueta y
+   * muestra una de cada N hasta que no se pisan. Con `interval={0}` las 13 horas de un horario
+   * 09:00–21:00 (≈403 px de texto) no cabían en los ~262 px útiles de la curva a 390 px.
    */
-  const intervaloEje = puntos.length <= 13 ? 0 : 1;
 
   return (
     <>
       <div
         role="img"
         aria-label={resumenHoy(puntos)}
-        className="h-64 w-full text-zinc-600 dark:text-zinc-400"
+        className="h-64 w-full text-tenue"
       >
         <ResponsiveContainer width="100%" height="100%" debounce={50}>
           <AreaChart
@@ -433,8 +434,8 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={{ stroke: "currentColor", strokeOpacity: 0.3 }}
-              interval={intervaloEje}
-              minTickGap={0}
+              interval="equidistantPreserveStart"
+              minTickGap={8}
             />
             <YAxis
               width={36}
@@ -468,7 +469,7 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
         </ResponsiveContainer>
       </div>
       <TablaHoy puntos={puntos} />
-      <p className="mt-2 text-[11px] leading-5 text-zinc-500 dark:text-zinc-400">
+      <p className="mt-2 text-[11px] leading-5 text-tenue">
         Un hueco en la curva significa que no hubo lectura en esa hora.
       </p>
     </>

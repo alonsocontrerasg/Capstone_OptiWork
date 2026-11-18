@@ -5,6 +5,11 @@
  * API pública mínima, la que realmente usa el dashboard:
  * - `horaLocalEnZona` → hora 0..23 de cada snapshot (curva de hoy, construida en el servidor).
  * - `horaDeTexto` → convierte `zonas.hora_apertura` / `hora_cierre` (`time` de Postgres).
+ * - `horarioDelDia` → horario del día en minutos locales (o `null` si ese día no abre). Es la
+ *   ÚNICA entrada de horario para `textoEstadoHorario` y para el «mejor momento»: hoy devuelve
+ *   el horario único de la zona y se reemplazará por el horario semanal sin cambiar firmas.
+ * - `textoEstadoHorario` → «Abierto hasta las HH:MM» / «Cerrado · abre …», con minutos.
+ * - `diaSemanaEnZona` → día ISO 1..7, la misma convención que `ocupacion_por_franja`.
  * - `limitesRangoDias` → límites representativos para `permanencia_promedio` y
  *   `personas_distintas`. Los helpers de cálculo quedan privados.
  *
@@ -26,6 +31,9 @@ type PartesZona = FechaCivil & {
 };
 
 const FORMATOS = new Map<string, Intl.DateTimeFormat | null>();
+
+/** Horas de un día civil; el cierre `24:00` llega a 24. */
+const HORAS_POR_DIA = 24;
 
 function obtenerFormato(timezone: string): Intl.DateTimeFormat | null {
   if (FORMATOS.has(timezone)) {
@@ -274,5 +282,202 @@ export function horaDeTexto(valor: string): number | null {
   if (hora === 24 && (minuto !== 0 || segundo !== 0)) return null;
 
   return hora;
+}
+
+/**
+ * Minutos locales desde medianoche de un `time` de Postgres (`"09:30"`, `"09:30:00"` o el
+ * cierre `"24:00"`). `24:00` devuelve 1440. Es la versión con minutos de `horaDeTexto`, que
+ * se conserva porque el dashboard histórico trabaja en horas enteras.
+ */
+function minutosDeHoraTexto(valor: string): number | null {
+  if (typeof valor !== "string") return null;
+
+  const coincidencia = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(
+    valor.trim(),
+  );
+  if (!coincidencia) return null;
+
+  const hora = Number(coincidencia[1]);
+  const minuto = Number(coincidencia[2]);
+  const segundo =
+    coincidencia[3] === undefined ? 0 : Number(coincidencia[3]);
+
+  if (
+    !Number.isInteger(hora) ||
+    hora < 0 ||
+    hora > 24 ||
+    !Number.isInteger(minuto) ||
+    minuto < 0 ||
+    minuto > 59 ||
+    !Number.isInteger(segundo) ||
+    segundo < 0 ||
+    segundo > 59
+  ) {
+    return null;
+  }
+
+  if (hora === 24 && (minuto !== 0 || segundo !== 0)) return null;
+
+  return hora * 60 + minuto;
+}
+
+/** Formatea minutos desde medianoche como `HH:MM`; `1440` → `"24:00"`. */
+export function formatearHoraEnMinutos(minutos: number): string | null {
+  if (
+    !Number.isInteger(minutos) ||
+    minutos < 0 ||
+    minutos > HORAS_POR_DIA * 60
+  ) {
+    return null;
+  }
+
+  const hora = Math.floor(minutos / 60);
+  const resto = minutos % 60;
+  return `${String(hora).padStart(2, "0")}:${String(resto).padStart(2, "0")}`;
+}
+
+/**
+ * Día de la semana ISO 8601 (1 = lunes … 7 = domingo) de un instante en la zona.
+ *
+ * Misma convención que `public.ocupacion_por_franja` (`extract(isodow from …)` en la
+ * migración 9), no la de `Date.getDay()` (0 = domingo). Así `dow` sirve directamente para
+ * filtrar `FilaFranja`.
+ */
+export function diaSemanaEnZona(
+  instante: Date,
+  timezone: string,
+): number | null {
+  const fecha = fechaCivilEnZona(instante, timezone);
+  if (!fecha) return null;
+
+  const diaUtc = new Date(
+    Date.UTC(fecha.anio, fecha.mes - 1, fecha.dia),
+  ).getUTCDay();
+
+  // getUTCDay(): 0 = domingo … 6 = sábado → ISO: 1 = lunes … 7 = domingo.
+  return diaUtc === 0 ? 7 : diaUtc;
+}
+
+/** Horario de un día en minutos locales desde medianoche (0..1440). */
+export type HorarioDia = { apertura: number; cierre: number };
+
+/** Datos mínimos de una zona para resolver su horario. */
+export type ZonaHorario = {
+  hora_apertura: string;
+  hora_cierre: string;
+  timezone: string;
+};
+
+/**
+ * Horario de la zona para el día de `instante`, en minutos locales, o `null` si ese día
+ * está cerrado.
+ *
+ * **Limitación actual:** el esquema todavía tiene un único `hora_apertura`/`hora_cierre`
+ * por zona (no hay horario semanal), así que hoy devuelve ese horario para cualquier día.
+ * Cuando llegue la migración del horario semanal, esta función es el único punto a cambiar:
+ * `instante` ya se recibe (y se valida) para que la firma no se mueva.
+ */
+export function horarioDelDia(
+  zona: ZonaHorario,
+  instante: Date,
+): HorarioDia | null {
+  // Falla cerrado si la zona horaria o el instante no son válidos.
+  if (!fechaCivilEnZona(instante, zona.timezone)) return null;
+
+  const apertura = minutosDeHoraTexto(zona.hora_apertura);
+  const cierre = minutosDeHoraTexto(zona.hora_cierre);
+  if (apertura === null || cierre === null) return null;
+  if (apertura < 0 || apertura >= cierre || cierre > HORAS_POR_DIA * 60) {
+    return null;
+  }
+
+  return { apertura, cierre };
+}
+
+/** «Lunes», «Martes»… de un instante en la zona; `null` si el motor no resuelve la zona. */
+const FORMATOS_DIA = new Map<string, Intl.DateTimeFormat | null>();
+
+function nombreDiaEnZona(instante: Date, timezone: string): string | null {
+  let formato = FORMATOS_DIA.get(timezone);
+  if (formato === undefined) {
+    try {
+      formato = new Intl.DateTimeFormat("es-CL", {
+        weekday: "long",
+        timeZone: timezone,
+      });
+    } catch {
+      formato = null;
+    }
+    FORMATOS_DIA.set(timezone, formato);
+  }
+
+  if (!formato) return null;
+
+  const nombre = formato.format(instante);
+  if (!nombre) return null;
+  return nombre.charAt(0).toUpperCase() + nombre.slice(1);
+}
+
+/** Días que se buscan hacia adelante para encontrar el próximo día abierto. */
+const MAX_DIAS_PROXIMA_APERTURA = 7;
+
+/**
+ * Estado del horario en lenguaje natural, con minutos: «Abierto hasta las 18:00»,
+ * «Cerrado · abre a las 08:30» o «Cerrado · abre mañana a las 08:30».
+ *
+ * - Usa SOLO `horarioDelDia` (nunca `hora_apertura`/`hora_cierre` directamente), para que el
+ *   futuro horario semanal no obligue a tocar esta función.
+ * - Si hoy ya cerró o el día está cerrado, busca el próximo día abierto como máximo 7 días
+ *   hacia adelante; si ninguno abre, devuelve `null` y la UI omite la línea.
+ * - Un horario inválido o una zona horaria desconocida también devuelven `null` (falla
+ *   cerrado: mejor no mostrar nada que afirmar un horario que no se pudo leer).
+ */
+export function textoEstadoHorario(
+  zona: ZonaHorario,
+  ahora: Date,
+): string | null {
+  const partes = partesEnZona(ahora, zona.timezone);
+  const hoy = fechaCivilEnZona(ahora, zona.timezone);
+  if (!partes || !hoy) return null;
+
+  const minutosAhora = partes.hora * 60 + partes.minuto;
+  const horarioHoy = horarioDelDia(zona, ahora);
+
+  if (horarioHoy) {
+    if (
+      minutosAhora >= horarioHoy.apertura &&
+      minutosAhora < horarioHoy.cierre
+    ) {
+      const hasta = formatearHoraEnMinutos(horarioHoy.cierre);
+      return hasta ? `Abierto hasta las ${hasta}` : null;
+    }
+
+    if (minutosAhora < horarioHoy.apertura) {
+      const desde = formatearHoraEnMinutos(horarioHoy.apertura);
+      return desde ? `Cerrado · abre a las ${desde}` : null;
+    }
+  }
+
+  // Ya cerró (o hoy no abre): se busca el próximo día abierto, desde mañana.
+  for (let salto = 1; salto <= MAX_DIAS_PROXIMA_APERTURA; salto += 1) {
+    const fecha = restarDiasCiviles(hoy, -salto);
+    // Mediodía local: nunca cae en el hueco/ambigüedad de DST.
+    const mediodia = instanteMediodiaEnZona(fecha, zona.timezone);
+    if (!mediodia) return null;
+
+    const horario = horarioDelDia(zona, mediodia);
+    if (!horario) continue;
+
+    const apertura = formatearHoraEnMinutos(horario.apertura);
+    if (!apertura) return null;
+
+    const cuando =
+      salto === 1 ? "mañana" : nombreDiaEnZona(mediodia, zona.timezone);
+    if (!cuando) return null;
+
+    return `Cerrado · abre ${cuando} a las ${apertura}`;
+  }
+
+  return null;
 }
 

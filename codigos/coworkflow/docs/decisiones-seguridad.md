@@ -52,10 +52,10 @@
 | S-34 | `camera=()` en `Permissions-Policy` | 4 |
 | S-35 | Rate limit en `/auth/login` por IP y hash de correo, sin enumerar | 4 |
 | S-36 | `getClaims()` no detecta revocación; `/admin` usará `getUser()` | 4 · 6 |
-| S-37 | Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI | 5 |
+| S-37 | Estadísticas en RSC sin Upstash: portada de 4 consultas y `/dashboard/estadisticas` de 5–6 | 5 |
 | S-38 | Agregados en Postgres y solo agregados al navegador (tope de 1000 filas) | 5 |
 | S-39 | Recharts como isla de cliente con `ssr: false`, sin relajar la CSP | 5 |
-| S-40 | Mapa de calor como tabla HTML en el servidor; celdas sin k-anonimato | 5 |
+| S-40 | Mapa de calor y tarjeta «Mejor momento» como HTML del servidor; sin k-anonimato | 5 |
 | S-41 | `z.config({ jitless: true })` en el cliente para no necesitar `'unsafe-eval'` | 5 |
 | S-42 | Cliente de navegador solo para Realtime: sin sesión y solo `ocupacion_actual` | 5 |
 | S-43 | Script de simulación local: `service_role` desde el entorno y confirmación explícita | 5 |
@@ -1250,13 +1250,16 @@ revocación surta efecto de inmediato en la ruta que emite tokens.
 
 ### S-37 · Estadísticas del dashboard en RSC, sin Upstash y con rangos cerrados solo en la UI
 
-**Decisión.** El dashboard público es un Server Component: resuelve la zona y los agregados en el
-servidor con el cliente `anon` (sujeto a RLS) y no expone una ruta HTTP propia para estadísticas.
-La UI solo ofrece `7` y `30` días mediante dos **enlaces `?rango=` renderizados en el servidor**
-(`RANGOS_DIAS` en `src/lib/validacion/dashboard.ts`): no hay toggle de cliente ni series
-precalculadas, sino una navegación que vuelve a renderizar el RSC con **una sola serie** del rango
-elegido (tarjetas y gráfico por hora) más las franjas de 30 días del mapa de calor, que se reutilizan
-de la misma promesa cuando `rango=30`. El contrato de lectura no se considera cerrado:
+**Decisión.** Las dos caras del dashboard público son Server Components que resuelven la zona y los
+agregados en el servidor con el cliente `anon` (sujeto a RLS) y no exponen una ruta HTTP propia para
+estadísticas: la portada `/dashboard` (contador en vivo y tres resúmenes de 30 días) y
+`/dashboard/estadisticas` (tarjetas, gráficos y mapa de calor). Solo la página de estadísticas ofrece
+`7` y `30` días mediante dos **enlaces `?rango=` renderizados en el servidor** (`RANGOS_DIAS` en
+`src/lib/validacion/dashboard.ts`): no hay toggle de cliente ni series precalculadas, sino una
+navegación que vuelve a renderizar el RSC con **una sola serie** del rango elegido (tarjetas y
+gráfico por hora) más las franjas de 30 días del mapa de calor, que se reutilizan de la misma
+promesa cuando `rango=30`. Un `?rango=` en la portada se valida pero se ignora. El contrato de
+lectura no se considera cerrado:
 `ocupacion_por_franja` valida 7/30 dentro de la RPC, mientras `permanencia_promedio` y
 `personas_distintas` siguen aceptando `p_desde`/`p_hasta` libres (1..90 días) y son ejecutables por
 `anon`, que es una clave pública. No se usa Upstash en lecturas.
@@ -1283,15 +1286,17 @@ revocar `EXECUTE` a `anon` de las variantes de rango libre, dejando solo wrapper
 tráfico lo justifica, un cubo de Upstash separado y **fail-open** para lecturas.
 
 **Dónde se implementa.** `src/lib/validacion/dashboard.ts` (lista `7|30`),
-`src/lib/supabase/dashboard.ts` (RSC con `anon`), migración 9 (`p_dias` validado) y
-`src/app/dashboard/page.tsx` (Tanda 3).
+`src/lib/supabase/dashboard.ts` (RSC con `anon`), migración 9 (`p_dias` validado),
+`src/app/dashboard/page.tsx` (portada) y `src/app/dashboard/estadisticas/page.tsx` (estadísticas,
+con `EstadisticasDashboard` y el selector 7/30).
 
 **Tradeoff.** La UI ofrece solo dos ventanas (menos flexibilidad para el informe), la limitación
-queda declarada en vez de resuelta y no hay rate limit por IP en lecturas. El costo real de una
-visita anónima con `rango=7` es de **hasta 7 consultas a Supabase** (zona, `ocupacion_actual`,
-franjas de 7 días, franjas de 30 días del mapa, `ocupacion_hoy`, permanencia y personas distintas);
-con `rango=30` son 6, porque la promesa de 30 días se reutiliza. Ninguna de esas consultas está
-limitada: quien visite o precargue la página en bucle las repite tantas veces como quiera.
+queda declarada en vez de resuelta y no hay rate limit por IP en lecturas. El costo real por visita
+anónima es de **4 consultas en la portada** (zona, `ocupacion_actual`, franjas de 30 días y
+`permanencia_promedio`) y de **hasta 6 en `/dashboard/estadisticas` con `rango=7`** (zona, franjas de 7
+días, franjas de 30 días del mapa, `ocupacion_hoy`, permanencia y personas distintas), que bajan a
+**5 con `rango=30`** porque la promesa de 30 días se reutiliza. Ninguna de esas consultas está
+limitada: quien visite o precargue las páginas en bucle las repite tantas veces como quiera.
 
 ### S-38 · Agregados en Postgres y solo agregados al navegador (tope de 1000 filas)
 
@@ -1372,6 +1377,15 @@ horario de la zona. No usa Recharts ni estilos inline: los cinco niveles de colo
 Tailwind literales de una sola gama. Cada celda imprime el número (`Math.round`) y `—` cuando no
 hubo muestras; la leyenda no depende solo del color.
 
+**La tarjeta «Mejor momento» (portada) sigue la misma regla.** Es un Server Component
+(`src/components/MejorMomento.tsx`) que recibe los promedios día × hora ya agregados y pinta las
+barras con HTML/CSS: ocho niveles de altura y color como clases Tailwind literales (`bg-marca/25`,
+`bg-marca/55`, …), sin Recharts y sin atributos `style`. Las horas sin datos se dibujan como un
+pilar neutro de 1 unidad, nunca como 0, y el conjunto es `role="img"` con un `aria-label` que enumera
+hora y promedio para lectores de pantalla. El texto («Antes de las 10:00 o desde las 15:00») sale de
+`tramosTranquilos`/`textoMejorMomento`, que solo marcan como tranquila una hora **con datos** cuyo
+promedio, como porcentaje del aforo, queda en estado «bajo» según `calcularEstado` y los umbrales de la zona, y de `horarioDelDia` para acotar el día al horario de la zona.
+
 **Amenaza.** (1) Dependencia de JavaScript: si el mapa de calor fuera una isla de cliente, quedaría
 vacío sin JS o con un chunk bloqueado, y es el gráfico que más se mira. (2) Fuga de datos: una
 rejilla día × hora es el gráfico con más riesgo de re-identificación si se alimentara de sesiones
@@ -1385,8 +1399,9 @@ rejilla es un promedio de ocupación del espacio. Al ser `<table>` semántica (c
 `scope` en los encabezados) funciona sin JavaScript, con lector de pantalla y con contraste en tema
 claro y oscuro, y el HTML que sale del servidor no necesita ninguna excepción de CSP.
 
-**Límite (las celdas no tienen k-anonimato).** Las celdas del mapa de calor y los puntos de los
-gráficos son promedios de ocupación **sin k-anonimato**: no hay umbral que oculte una celda. En un
+**Límite (celdas y barras sin k-anonimato).** Las celdas del mapa de calor, las barras de «Mejor
+momento» y los puntos de los gráficos son promedios de ocupación **sin k-anonimato**: no hay umbral
+que oculte una celda. En un
 cowork pequeño una celda con 1–4 personas puede corresponder a una sola persona con horario fijo
 (por ejemplo, la única que entra todos los martes a las 09:00). Se acepta porque el contador en vivo
 ya es público por diseño (S-03), porque el dato es agregado a partir de snapshots de 5 min y porque
@@ -1397,7 +1412,10 @@ snapshots.
 
 **Dónde se implementa.** `src/components/MapaCalorDashboard.tsx` (recibe `filas`, `horas`,
 `aforoMax` y `horario`), `construirMatrizCalor`/`horasDelHorario` en
-`src/lib/dominio/estadisticas.ts` y el cableado en `src/components/EstadisticasDashboard.tsx`.
+`src/lib/dominio/estadisticas.ts`, el cableado en `src/components/EstadisticasDashboard.tsx` y, para
+la tarjeta de la portada, `src/components/MejorMomento.tsx` con `tramosTranquilos`,
+`promedioPorHoraDelDia` y `textoMejorMomento` en `src/lib/dominio/estadisticas.ts` más
+`horarioDelDia` de `src/lib/dominio/tiempo.ts`.
 
 **Tradeoff.** Siempre se consulta el rango de 30 días para el mapa (una RPC más, acotada a ≤168
 filas), y con `rango=7` las tarjetas y el mapa cubren ventanas distintas: se explica en el texto de
@@ -1478,7 +1496,8 @@ contador que ya es público por diseño (S-03).
 (`esCantidadValida`, estado de conexión, `router.refresh()`).
 
 **Tradeoff.** Cada reconexión (pestaña dormida, cambio de red, redeploy) dispara un
-`router.refresh()` que **repite todas las consultas del servidor** de la página —hasta 7, ver S-37—
+`router.refresh()` que **repite todas las consultas del servidor** de la página —4 en la portada,
+donde vive el contador, ver S-37—
 y no tiene freno ni retroceso exponencial: un cliente que pierda y recupere cobertura en bucle genera
 esa ráfaga cada vez.
 
@@ -1532,7 +1551,7 @@ de escribir `si`.
 | # | Limitación | Estado y mitigación futura |
 | --- | --- | --- |
 | 1 | Una **caída de Supabase se ve como 404**: `obtenerZonaPorSlug` devuelve `null` tanto si la zona no existe como si la consulta falla, y la página llama a `notFound()`. | Verificado leyendo `src/lib/supabase/zonas.ts` y `src/app/dashboard/page.tsx` (no reproducido con Supabase caído). Mitigación futura: distinguir «error» de «no existe» |
-| 2 | **Sin rate limit en las lecturas** del dashboard (hasta 7 consultas por visita, S-37), ni por IP ni por usuario. | Decidido a propósito en S-37; mitigación futura: cubo separado **fail-open** para lecturas |
+| 2 | **Sin rate limit en las lecturas** del dashboard (4 consultas en la portada y hasta 6 en `/dashboard/estadisticas`, S-37), ni por IP ni por usuario. | Decidido a propósito en S-37; mitigación futura: cubo separado **fail-open** para lecturas |
 | 3 | El `router.refresh()` de la reconexión de Realtime **no tiene freno** (S-42): cada reconexión repite las consultas del servidor. | Sin medir en producción; mitigación futura: retroceso exponencial o debounce |
 
 ---

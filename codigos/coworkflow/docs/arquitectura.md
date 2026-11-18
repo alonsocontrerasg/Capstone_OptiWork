@@ -198,21 +198,33 @@ sin dejar fila) y `rate_limited` lo genera el **borde** cuando Upstash niega el 
 - Fallback previsto (fuera del MVP): QR estático impreso + geolocalización opcional con
   consentimiento.
 
-### 5.3 Dashboard público (`/dashboard`)
+### 5.3 Dashboard público (`/dashboard`) y estadísticas (`/dashboard/estadisticas`)
 
-1. `src/app/dashboard/page.tsx` es un Server Component (`force-dynamic`): resuelve `?zona=<slug>`
-   (o `NEXT_PUBLIC_ZONA_POR_DEFECTO`) y desde `src/lib/supabase/dashboard.ts` lee
-   `ocupacion_actual` (tabla, acotada por RLS) y llama a las RPC `ocupacion_por_franja`,
-   `ocupacion_hoy`, `permanencia_promedio` y `personas_distintas`; el agregado se calcula en la
-   base y el HTML llega ya pintado.
+1. `src/app/dashboard/page.tsx` es la **portada** (Server Component, `force-dynamic`): resuelve
+   `?zona=<slug>` (o `NEXT_PUBLIC_ZONA_POR_DEFECTO`) y hace **4 consultas**: la zona,
+   `ocupacion_actual` (tabla, acotada por RLS), las franjas de 30 días y `permanencia_promedio`.
+   Muestra el contador en vivo, la tarjeta «Mejor momento» (horas tranquilas del día, calculadas en
+   el servidor) y dos resúmenes: hora más llena y estadía promedio. Un `?rango=` heredado se valida
+   pero se ignora; el agregado se calcula en la base y el HTML llega ya pintado.
 2. La única isla de cliente con Realtime es `ContadorOcupacion`: se suscribe a `postgres_changes`
    sobre `ocupacion_actual` filtrado por `zona_id` y actualiza contador, barra y semáforo sin
    recargar. Si el canal se cae, el cliente de Supabase se reconecta solo y el contador muestra el
    estado («Reconectando…» o «Sin conexión en vivo»); tras un corte, al volver a `SUBSCRIBED` se
    pide `router.refresh()` para recuperar el dato actual del RSC (no hay backoff propio).
-3. Los gráficos van aparte: `GraficosDashboardCarga` importa `GraficosDashboard` con
+3. `src/app/dashboard/estadisticas/page.tsx` es la página de **estadísticas** (RSC): ofrece el rango
+   con dos enlaces `?rango=7|30` renderizados en el servidor y monta `EstadisticasDashboard`, que
+   llama a `ocupacion_por_franja` (7 o 30 días), `ocupacion_por_franja(30)` para el mapa (se
+   reutiliza la promesa si `rango=30`), `ocupacion_hoy`, `permanencia_promedio` y
+   `personas_distintas`: **7 consultas con `rango=7` y 6 con `rango=30`**, más la lectura de la zona.
+4. Los gráficos van aparte: `GraficosDashboardCarga` importa `GraficosDashboard` con
    `next/dynamic` y `ssr: false`, así Recharts no entra al HTML del servidor y solo recibe arrays
-   agregados y pequeños (`{ etiqueta, promedio, muestras }`, `{ etiqueta, cantidad }`).
+   agregados y pequeños (`{ etiqueta, promedio, muestras }`, `{ etiqueta, cantidad }`). El eje X usa
+   `interval="equidistantPreserveStart"` con `minTickGap={8}`: Recharts mide cada etiqueta y muestra
+   una de cada N hasta que no se pisan, de modo que a 390 px se ven menos horas en lugar de etiquetas
+   superpuestas.
+5. El mapa de calor es HTML del servidor (`MapaCalorDashboard`: tabla lunes→domingo × horas del
+   horario, siempre sobre 30 días) y la tarjeta «Mejor momento» usa barras HTML/CSS
+   (`MejorMomento`): ninguna de las dos depende de JavaScript ni de excepciones de CSP.
 
 ### 5.4 Admin (`/admin`)
 

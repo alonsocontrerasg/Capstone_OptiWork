@@ -35,7 +35,13 @@ import type { RangoDias } from "@/lib/validacion/dashboard";
 
 
 /**
- * Estadísticas del dashboard, renderizadas en el servidor.
+ * Estadísticas de uso de una zona, renderizadas en el servidor.
+ *
+ * Lo monta `/dashboard/estadisticas` (Paso 2 de la Etapa 6): la página es dueña del
+ * título, del selector 7/30 y de la nota de privacidad; este componente solo pinta
+ * tarjetas, gráficos y mapa de calor. Coste: 5 consultas con `rango=30` y 6 con
+ * `rango=7` (las franjas de 30 días del mapa se reutilizan), más la lectura de la zona
+ * que hace la página.
  *
  * Las lecturas se lanzan en paralelo. Cada bloque conserva su propio estado: una RPC caída
  * muestra «No se pudo cargar» solo en su tarjeta, mientras el resto sigue visible.
@@ -90,9 +96,9 @@ function TarjetaEstadistica({
   detalle,
 }: PropsTarjeta) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-      <dt className="flex items-center gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
-        <span className="grid size-8 place-items-center rounded-lg bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+    <div className="tarjeta">
+      <dt className="flex items-center gap-2 text-sm font-medium text-tenue">
+        <span className="grid size-8 place-items-center rounded-lg bg-marca-suave text-marca">
           <Icono aria-hidden className="size-4" />
         </span>
         {titulo}
@@ -100,7 +106,7 @@ function TarjetaEstadistica({
       <dd className="mt-3">
         {children}
         {detalle ? (
-          <span className="mt-1 block text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+          <span className="mt-1 block text-xs leading-5 text-tenue">
             {detalle}
           </span>
         ) : null}
@@ -111,10 +117,10 @@ function TarjetaEstadistica({
 
 function clasesValor(tono: Tono): string {
   if (tono === "error") {
-    return "text-base font-medium text-red-600 dark:text-red-400";
+    return "text-base font-medium text-lleno-texto";
   }
   if (tono === "vacio") {
-    return "text-base font-medium text-zinc-500 dark:text-zinc-400";
+    return "text-base font-medium text-tenue";
   }
   return "text-2xl font-semibold tracking-tight tabular-nums";
 }
@@ -246,31 +252,22 @@ export async function EstadisticasDashboard({
   const filasMapaCalor = franjasMapa.ok ? franjasMapa.valor : null;
 
 
-  return (
-    <section aria-labelledby="estadisticas-titulo" className="mt-8">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h2
-            id="estadisticas-titulo"
-            className="text-xl font-semibold tracking-tight"
-          >
-            Estadísticas de uso
-          </h2>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            Últimos {rango} días · solo cifras agregadas.
-          </p>
-        </div>
-        {!franjas.ok ||
-        !permanencia.ok ||
-        !personas.ok ||
-        snapshotsHoy === null ? (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Algunas secciones no están disponibles en este momento.
-          </p>
-        ) : null}
-      </div>
+  const hayFallas =
+    !franjas.ok || !permanencia.ok || !personas.ok || snapshotsHoy === null;
 
-      <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+  return (
+    <section aria-label="Estadísticas de uso" className="mt-6">
+      {hayFallas ? (
+        <p
+          role="status"
+          className="mb-4 rounded-2xl border border-borde bg-marca-suave px-4 py-3 text-xs leading-5 text-tenue"
+        >
+          Algunas secciones no están disponibles en este momento; el resto sigue
+          mostrando los últimos datos disponibles.
+        </p>
+      ) : null}
+
+      <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <TarjetaEstadistica titulo="Permanencia promedio" Icono={Timer}>
           <span className={clasesValor(permanenciaTexto.tono)}>
             {permanenciaTexto.texto}
@@ -294,9 +291,9 @@ export async function EstadisticasDashboard({
         </TarjetaEstadistica>
       </dl>
 
-      <div className="mt-6 space-y-4">
+      <div className="mt-8 space-y-4">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <CalendarDays aria-hidden className="size-4" />
+          <CalendarDays aria-hidden className="size-4 text-marca" />
           Ocupación por hora y por día
         </h3>
 

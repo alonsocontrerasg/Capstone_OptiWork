@@ -1,6 +1,16 @@
 "use client";
 
-import { CloudOff, LoaderCircle, Radio, type LucideIcon } from "lucide-react";
+import {
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  CloudOff,
+  LoaderCircle,
+  Radio,
+  TriangleAlert,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -9,7 +19,9 @@ import { SemaforoOcupacion } from "@/components/SemaforoOcupacion";
 import {
   esCantidadValida,
   formatearPorcentaje,
+  fraseEstado,
   resumirOcupacion,
+  type EstadoOcupacion,
 } from "@/lib/dominio/ocupacion";
 import { formatearFechaHoraLocal } from "@/lib/dominio/tiempo";
 import { suscribirseOcupacionActual } from "@/lib/supabase/browser";
@@ -42,6 +54,11 @@ type Props = {
   umbralBajo: number;
   umbralAlto: number;
   timezone: string;
+  /**
+   * Línea de horario ya resuelta en el servidor («Abierto hasta las 18:00»). `null` si la
+   * zona no declara un horario legible: la tarjeta omite la línea.
+   */
+  horarioTexto: string | null;
 };
 
 type Lectura = {
@@ -62,21 +79,37 @@ const INDICADORES: Record<EstadoConexion, Indicador> = {
   en_vivo: {
     texto: "En vivo",
     Icono: Radio,
-    clases: "text-emerald-700 dark:text-emerald-400",
+    clases: "text-bajo-texto",
     girar: false,
   },
   reconectando: {
     texto: "Reconectando…",
     Icono: LoaderCircle,
-    clases: "text-amber-700 dark:text-amber-400",
+    clases: "text-moderado-texto",
     girar: true,
   },
   sin_conexion: {
     texto: "Sin conexión en vivo: el valor puede estar desactualizado",
     Icono: CloudOff,
-    clases: "text-red-700 dark:text-red-400",
+    clases: "text-lleno-texto",
     girar: false,
   },
+};
+
+type EstadoVisual = {
+  Icono: LucideIcon;
+  clases: string;
+};
+
+/**
+ * Icono + color de texto de cada estado. El texto de la frase (`fraseEstado`) es la señal
+ * principal: el color es un refuerzo, nunca la única diferencia (WCAG 1.4.1).
+ */
+const ESTADO_VISUAL: Record<EstadoOcupacion, EstadoVisual> = {
+  bajo: { Icono: CircleCheck, clases: "text-bajo-texto" },
+  moderado: { Icono: TriangleAlert, clases: "text-moderado-texto" },
+  lleno: { Icono: CircleX, clases: "text-lleno-texto" },
+  desconocido: { Icono: CircleHelp, clases: "text-tenue" },
 };
 
 export function ContadorOcupacion({
@@ -87,6 +120,7 @@ export function ContadorOcupacion({
   umbralBajo,
   umbralAlto,
   timezone,
+  horarioTexto,
 }: Props) {
   const router = useRouter();
   const [lectura, setLectura] = useState<Lectura>(() => ({
@@ -142,6 +176,8 @@ export function ContadorOcupacion({
   const actualizado = formatearFechaHoraLocal(lectura.updatedAt, timezone);
   const indicador = INDICADORES[conexion];
   const { Icono } = indicador;
+  const estadoVisual = ESTADO_VISUAL[resumen.estado];
+  const IconoEstado = estadoVisual.Icono;
 
   const textoAccesible =
     lectura.cantidad === null
@@ -157,7 +193,7 @@ export function ContadorOcupacion({
   return (
     <section
       aria-labelledby="ocupacion-titulo"
-      className="mt-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
+      className="mt-6 rounded-3xl border border-borde bg-superficie p-6 shadow-sm sm:p-8"
     >
       <p className="sr-only" aria-live="polite">
         {textoAccesible}
@@ -167,17 +203,22 @@ export function ContadorOcupacion({
         <div>
           <h2
             id="ocupacion-titulo"
-            className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+            className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-tenue"
           >
-            Personas dentro
+            <Users aria-hidden className="size-4 shrink-0" />
+            Ahora en el cowork
           </h2>
+          <p
+            className={`mt-3 flex items-center gap-1.5 text-sm font-semibold ${estadoVisual.clases}`}
+          >
+            <IconoEstado aria-hidden className="size-4 shrink-0" />
+            <span>{fraseEstado(resumen.estado)}</span>
+          </p>
           <div className="mt-2 flex flex-wrap items-baseline gap-2">
             <p className="text-7xl font-semibold leading-none tracking-tight tabular-nums">
               {lectura.cantidad === null ? "—" : resumen.cantidad}
             </p>
-            <p className="text-lg text-zinc-500 dark:text-zinc-400">
-              de {aforoMax}
-            </p>
+            <p className="text-lg text-tenue">de {aforoMax} personas</p>
           </div>
         </div>
         <SemaforoOcupacion estado={resumen.estado} />
@@ -191,14 +232,16 @@ export function ContadorOcupacion({
           </span>
         </div>
         <BarraAforo porcentaje={resumen.porcentaje} estado={resumen.estado} />
-        <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+        <p className="mt-2 text-xs leading-5 text-tenue">
           Semáforo: bajo &lt; {umbralBajo}% · moderado {umbralBajo}–{umbralAlto}%
           · lleno &gt;{umbralAlto}% del aforo.
         </p>
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-4 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-        <span className={`flex items-center gap-1.5 ${indicador.clases}`}>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-borde pt-4 text-xs text-tenue">
+        <span
+          className={`flex items-center gap-1.5 font-medium ${indicador.clases}`}
+        >
           <Icono
             aria-hidden
             className={`size-3.5 shrink-0 ${
@@ -207,7 +250,10 @@ export function ContadorOcupacion({
           />
           <span>{indicador.texto}</span>
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {horarioTexto ? (
+            <span className="font-medium text-tinta">{horarioTexto}</span>
+          ) : null}
           <span>
             {lectura.cantidad === null
               ? "No pudimos leer la ocupación en este momento."
