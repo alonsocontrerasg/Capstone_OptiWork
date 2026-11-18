@@ -23,7 +23,7 @@ type Props = {
 
 // Metadata estática a propósito: `generateMetadata` dinámico se resuelve en paralelo al
 // render (metadata en streaming) y no sirve para adelantar el 404 de una zona inexistente.
-export const metadata: Metadata = { title: "Dashboard · CoworkFlow" };
+export const metadata: Metadata = { title: "Dashboard · OptiWork" };
 
 function EstadisticasCargando() {
   return (
@@ -80,13 +80,10 @@ export default async function PaginaDashboard({ searchParams }: Props) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+      <header className="border-b border-borde bg-superficie">
+        <div className="contenedor flex flex-wrap items-center justify-between gap-4 py-4">
           <div>
-            <Link href="/" className="text-sm font-semibold">
-              ← CoworkFlow
-            </Link>
-            <h1 className="mt-1 text-lg font-semibold">{zona.nombre}</h1>
+            <h1 className="text-lg font-semibold">{zona.nombre}</h1>
             {horario ? (
               <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                 Horario {horario}
@@ -121,7 +118,7 @@ export default async function PaginaDashboard({ searchParams }: Props) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      <main className="contenedor flex-1 py-8">
         {datosDemoActivos ? (
           // Labelling obligatorio de la demo: quien mire el dashboard tiene que saber que parte
           // de las cifras es simulada (scripts/simular-ocupacion.ts). Solo clases de Tailwind,
@@ -167,7 +164,7 @@ export default async function PaginaDashboard({ searchParams }: Props) {
         </Suspense>
 
         <p className="mt-8 max-w-3xl text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          CoworkFlow publica solo datos agregados. Los registros individuales de
+          OptiWork publica solo datos agregados. Los registros individuales de
           entrada y salida se eliminan a los 90 días y solo se conservan los
           agregados. La permanencia promedio y la cantidad de personas distintas
           se muestran únicamente si el período incluye al menos 5 personas

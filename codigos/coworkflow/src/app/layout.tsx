@@ -1,25 +1,29 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
+
+import { Encabezado } from "@/components/layout/Encabezado";
+import { Pie } from "@/components/layout/Pie";
+
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
   title: {
-    default: "CoworkFlow · Hub Providencia",
-    template: "%s · CoworkFlow",
+    default: "OptiWork · Hub Providencia",
+    template: "%s · OptiWork",
   },
   description:
     "Monitoreo de ocupación en tiempo real del cowork del Hub Providencia: check-in y check-out con QR, aforo y estadísticas de uso.",
-  applicationName: "CoworkFlow",
+  applicationName: "OptiWork",
   robots: { index: false, follow: false },
 };
 
@@ -27,10 +31,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="es-CL"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
+      <body className="flex min-h-full flex-col bg-fondo font-sans text-tinta">
+        <Encabezado />
         {children}
+        <Pie />
       </body>
     </html>
   );

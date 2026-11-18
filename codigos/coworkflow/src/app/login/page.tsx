@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { FormularioLogin } from "@/components/auth/FormularioLogin";
@@ -45,18 +44,7 @@ export default async function PaginaLogin({ searchParams }: Props) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4 px-6 py-4">
-          <Link href="/" className="text-sm font-semibold">
-            ← CoworkFlow
-          </Link>
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">
-            Hub Providencia
-          </span>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-md flex-1 px-6 py-10">
+      <main className="mx-auto w-full max-w-md flex-1 px-5 py-10 md:px-8">
         <h1 className="text-2xl font-semibold tracking-tight">Iniciar sesión</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           Entra para marcar tu entrada y salida. Si es tu primera vez, en la portada verás el

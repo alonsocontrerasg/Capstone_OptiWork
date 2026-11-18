@@ -1,26 +1,140 @@
 @import "tailwindcss";
 
+/*
+ * Tema claro único. La variante `dark:` solo se activa con una clase `.dark`,
+ * que la app nunca añade: así las clases `dark:` heredadas quedan inertes.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+}
+
+@theme {
+  --color-fondo: #f6f7f9;
+  --color-superficie: #ffffff;
+  --color-tinta: #111827;
+  --color-tenue: #4b5563;
+  --color-borde: #e5e7eb;
+  --color-marca: #0b6e79;
+  --color-marca-oscura: #08525a;
+  --color-marca-suave: #e6f2f3;
+
+  /* Intensos: barra, punto e ícono. */
+  --color-bajo: #15803d;
+  --color-moderado: #b45309;
+  --color-lleno: #b91c1c;
+
+  /* Texto de estado: contraste >= 4.5:1 sobre su fondo. */
+  --color-bajo-texto: #166534;
+  --color-moderado-texto: #92400e;
+  --color-lleno-texto: #991b1b;
+
+  --color-bajo-fondo: #dcfce7;
+  --color-moderado-fondo: #fef3c7;
+  --color-lleno-fondo: #fee2e2;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-space-grotesk);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Contenedor común: centrado, máx. 1120px y 20px -> 32px de padding lateral. */
+@utility contenedor {
+  width: 100%;
+  max-width: 70rem;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 0.5rem + 3vw, 2rem);
+}
+
+@utility btn-primario {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding-inline: 1rem;
+  border-radius: 14px;
+  background-color: var(--color-marca);
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background-color 150ms ease;
+
+  &:hover {
+    background-color: var(--color-marca-oscura);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-marca);
+    outline-offset: 2px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@utility btn-secundario {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding-inline: 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--color-borde);
+  background-color: var(--color-superficie);
+  color: var(--color-tinta);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+
+  &:hover {
+    border-color: var(--color-marca);
+    background-color: var(--color-marca-suave);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-marca);
+    outline-offset: 2px;
+  }
+}
+
+@utility enlace-header {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: 0.75rem;
+  border-radius: 9999px;
+  color: var(--color-tenue);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+
+  &:hover {
+    background-color: var(--color-marca-suave);
+    color: var(--color-tinta);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-marca);
+    outline-offset: 2px;
+  }
+}
+
+@utility foco-marca {
+  &:focus-visible {
+    outline: 2px solid var(--color-marca);
+    outline-offset: 2px;
+  }
+}
+
+@utility tarjeta {
+  border: 1px solid var(--color-borde);
+  border-radius: 20px;
+  background-color: var(--color-superficie);
+  padding: 1.5rem;
 }

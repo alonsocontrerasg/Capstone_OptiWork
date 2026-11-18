@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { QrRotativo } from "@/components/qr/QrRotativo";
 import { requireAdmin } from "@/lib/auth/guards";
 import { envPublico } from "@/lib/env";
@@ -30,13 +28,10 @@ export default async function PaginaQr({ searchParams }: Props) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+      <header className="border-b border-borde bg-superficie">
+        <div className="contenedor flex flex-wrap items-center justify-between gap-4 py-4">
           <div>
-            <Link href="/" className="text-sm font-semibold">
-              ← CoworkFlow
-            </Link>
-            <h1 className="mt-1 text-lg font-semibold">QR rotativo</h1>
+            <h1 className="text-lg font-semibold">QR rotativo</h1>
           </div>
 
           {zonas.length > 1 && (
@@ -67,7 +62,7 @@ export default async function PaginaQr({ searchParams }: Props) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      <main className="contenedor flex-1 py-8">
         {zona ? (
           <>
             <p className="max-w-2xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">

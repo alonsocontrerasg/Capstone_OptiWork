@@ -36,53 +36,7 @@ export default async function Home({ searchParams }: Props) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <span
-              aria-hidden
-              className="grid size-9 place-items-center rounded-lg bg-zinc-900 text-sm font-semibold text-white dark:bg-white dark:text-zinc-900"
-            >
-              CF
-            </span>
-            <div>
-              <p className="text-sm font-semibold leading-tight">CoworkFlow</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Hub Providencia
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="rounded-full px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Dashboard
-            </Link>
-
-            {sesion ? (
-              <form action="/auth/signout" method="post">
-                <button
-                  type="submit"
-                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
-                  Cerrar sesión
-                </button>
-              </form>
-            ) : (
-              <Link
-                href="/login"
-                className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
-                Iniciar sesión
-              </Link>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
+      <main className="contenedor flex-1 py-10">
         <h1 className="text-3xl font-semibold tracking-tight">
           Ocupación del cowork en tiempo real
         </h1>
@@ -138,7 +92,7 @@ export default async function Home({ searchParams }: Props) {
               </h2>
               <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                 Sesión iniciada. Rol:{" "}
-                <span className="font-medium text-foreground">
+                <span className="font-medium text-tinta">
                   {sesion.perfil?.rol ?? "usuario"}
                 </span>
                 .
@@ -181,11 +135,6 @@ export default async function Home({ searchParams }: Props) {
           </section>
         )}
       </main>
-
-      <footer className="border-t border-zinc-200 px-6 py-6 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-        CoworkFlow · proyecto académico · los registros individuales se eliminan a los 90
-        días y las estadísticas se publican solo con k ≥ 5 personas.
-      </footer>
     </div>
   );
 }
