@@ -35,12 +35,20 @@ suite aplica la migración `20261119000000_ocupacion_concurrente.sql` y las prue
 
 ## Estado del despliegue (2026-11-19)
 
-**Pendiente: ejecutar la migración en Supabase.** La persona que prepara este cambio no tiene
-permisos en el proyecto de Supabase. Las pruebas descritas se ejecutaron únicamente en una base
-PostgreSQL local; todavía falta aplicar y verificar la migración en el proyecto remoto.
+**Aplicada y verificada en Supabase.** El 19 de noviembre de 2026 se ejecutó la migración completa
+desde el SQL Editor del proyecto `coworkflow`, rama `main` (producción), con el rol `postgres`.
+La ejecución terminó con `Success. No rows returned`.
 
-Una persona autorizada del equipo debe ejecutar la migración y luego la verificación actualizada,
-y registrar el resultado antes de considerar resuelto el despliegue.
+Las comprobaciones de `supabase/verificacion.sql`, ejecutadas en formato compacto con los mismos
+controles y mensajes abreviados, terminaron correctamente. El informe final devolvió `OK` a las
+22:57:59 UTC (19:57:59 de Chile): 3 triggers del contador, 4 jobs activos y secreto QR configurado.
+Se comprobaron RLS, políticas, privilegios, funciones, horario semanal, agregados, Realtime y
+consistencia entre el contador y las sesiones abiertas. No se mostraron los valores de secretos.
+
+La base no tiene `supabase_migrations.schema_migrations`; se conservó el flujo manual existente
+del proyecto, sin crear ni alterar el historial de migraciones. Las pruebas de concurrencia con
+usuarios simulados se ejecutaron en PostgreSQL local; no se inyectaron sesiones de prueba en
+producción. La validación funcional del login/escaneo en el despliegue web es una prueba aparte.
 
 Para desplegar la corrección, ejecutar el archivo completo de esa migración en el SQL Editor de
 Supabase, después de las diez anteriores, y luego ejecutar `supabase/verificacion.sql` actualizado.
