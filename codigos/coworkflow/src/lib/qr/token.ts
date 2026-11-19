@@ -14,8 +14,8 @@
  *
  * Este módulo es PURO (no lee variables de entorno ni usa `next/*`): recibe el secreto como
  * argumento, así Vitest puede probarlo sin montar la app y el secreto no se filtra por un
- * import accidental. La verificación de la firma ocurre en Postgres (S-16), no aquí: Next
- * solo firma.
+ * import accidental. Postgres verifica la asistencia (S-16). La verificación adicional en
+ * `verificar.ts` solo autoriza conservar un escaneo durante el registro (S-48).
  */
 
 export const VERSION_TOKEN_QR = "v1";

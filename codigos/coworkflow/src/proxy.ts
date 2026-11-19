@@ -77,7 +77,7 @@ function construirCsp(nonce: string): string {
  * necesita un `Referrer-Policy` más estricto que el global.
  */
 function esRutaScan(ruta: string): boolean {
-  return ruta === "/scan";
+  return ruta === "/scan" || ruta === "/auth/scan";
 }
 
 function aplicarCabecerasDeSeguridad(

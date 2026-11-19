@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { LayoutDashboard, QrCode } from "lucide-react";
+import { redirect } from "next/navigation";
 
 import { AvisoConsentimiento } from "@/components/auth/AvisoConsentimiento";
 import { obtenerSesion } from "@/lib/auth/session";
@@ -10,6 +11,7 @@ import {
   tieneConsentimiento,
 } from "@/lib/dominio/consentimiento";
 import { modoDesdeIndicadorScan } from "@/lib/validacion/scan";
+import { obtenerScanPendiente } from "@/lib/scan/pendiente";
 
 const formatoFecha = new Intl.DateTimeFormat("es-CL", {
   dateStyle: "long",
@@ -33,6 +35,9 @@ export default async function Home({ searchParams }: Props) {
   const desactualizado = consentimientoDesactualizado(sesion?.perfil);
   const params = await searchParams;
   const modoScan = modoDesdeIndicadorScan(params.desde, params.modo);
+  if (sesion && conConsentimiento && modoScan && (await obtenerScanPendiente())) {
+    redirect("/scan");
+  }
 
   return (
     <div className="flex flex-1 flex-col">

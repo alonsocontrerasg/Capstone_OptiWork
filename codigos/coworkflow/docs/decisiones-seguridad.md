@@ -358,6 +358,9 @@ una disputa); se acepta porque el objetivo del sistema es el aforo, no la vigila
 
 ### S-12 · `/scan` sin sesión descarta el token (no se reutiliza después del login)
 
+> Actualización 2026-11-19: S-48 sustituye el reescaneo obligatorio por una continuación de
+> diez minutos y un solo uso. El QR original sigue sin reenviarse al login ni al correo.
+
 **Decisión.** Si alguien abre `/scan` sin sesión, se redirige a `/login` **sin conservar el token**:
 no viaja en `?next=`, ni en cookie, ni en `sessionStorage`/`localStorage`. Al volver del login, la
 persona debe escanear el QR otra vez. El token tampoco se registra en logs de aplicación y `/scan`
@@ -1564,6 +1567,9 @@ de escribir `si`.
 
 ### S-44 · Transición post-login del escaneo: solo un indicador sin token
 
+> Actualización 2026-11-19: el indicador sigue siendo informativo; S-48 permite reanudar un
+> escaneo verificado mediante una cookie opaca. Ya no se exige reescanear en el recorrido normal.
+
 **Decisión.** Cuando `GET /scan` no tiene sesión o consentimiento, redirige a
 `/login?desde=scan&modo=<entrada|salida>` o a `/?desde=scan&modo=<entrada|salida>` en vez de
 `/login` o `/`. El indicador viaja **sin el token**: `desde` es un enum cerrado (`scan`) y
@@ -1762,6 +1768,44 @@ PostgreSQL/PostgREST. Con REPEATABLE READ o SERIALIZABLE pueden requerirse reint
 también pueden requerir reintentos por 40P01. No se garantiza ausencia de todo deadlock arbitrario.
 No se aplica la migración automáticamente a Supabase desde estas pruebas.
 
+### S-48 · Continuación breve del escaneo durante registro y consentimiento
+
+**Problema.** Descartar el QR al iniciar sesión obliga a escanear otra vez después de crear la
+cuenta o aceptar el aviso. Guardar el token original no resuelve su vencimiento de 45–90 segundos.
+
+**Decisión.** Antes de mandar al login, `GET /auth/scan` limita por IP y verifica en el servidor
+la firma HMAC con comparación en tiempo constante y la ventana actual/anterior del QR original.
+Solo si es válido crea una clave aleatoria de 256 bits, con TTL de 600 segundos en Upstash Redis.
+Su valor contiene únicamente zona, modo y vencimiento; no contiene QR, correo, IP ni usuario.
+La cookie `ow_scan_pendiente` contiene solo la clave opaca, es httpOnly, SameSite=Lax, Secure en
+producción, host-only y expira a los diez minutos. Leerla nunca renueva el plazo.
+
+Login, registro con/sin confirmación y enlace mágico vuelven a `/scan`. El correo de confirmación
+debe abrirse en el mismo navegador y dominio que el escaneo. Sin consentimiento, la portada
+conserva el indicador y vuelve a la confirmación cuando se acepta. Ningún GET marca asistencia.
+
+`POST /api/scan` conserva origen, validación, sesión y límites por IP/usuario. Con el marcador
+`pendiente`, exige además consentimiento antes de consumir. `GETDEL` de Redis canjea el registro
+una sola vez, incluso con POST simultáneos. Solo los datos del registro autorizado permiten
+firmar un QR vigente; nunca se aceptan zona/modo del cliente para este canje. La RPC ordinaria
+valida de nuevo firma, consentimiento, horario, estado de zona, cooldown y sesión abierta con
+el JWT del usuario. Se borra la cookie tras el canje. No usa `service_role` ni cambia SQL/RLS.
+
+**Límites y tradeoff.** Se acepta explícitamente que una prueba de presencia válida pueda
+confirmarse hasta diez minutos después, para permitir el alta; los QR normales conservan su
+ventana corta. La continuación no permite usos repetidos ni se comparte por URL. Upstash es
+obligatorio en producción y los errores fallan cerrados; la memoria local solo se permite en
+desarrollo. Si el servicio falla después de consumir y antes de completar la RPC, se requiere
+escanear de nuevo. El consumo y la escritura SQL no son una transacción distribuida. Abrir el
+correo en otro navegador/dominio o tardar más de diez minutos también requiere otro escaneo.
+`Referrer-Policy: strict-origin` y `Cache-Control: no-store` cubren `/auth/scan`; no se registran
+tokens, cookies ni errores completos de proveedores.
+
+**Verificación.** `npm run test:unit`: firma/ventana, alta y callback de confirmación, acceso con
+contraseña/enlace, consentimiento antes de consumir, conservación de zona/modo, expiración fija,
+cookies inventadas, doble POST y replay, origen/rate limit y caída de Redis. Los servicios externos
+se sustituyen por dobles de prueba; la validación manual en el despliegue es adicional.
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
@@ -1777,7 +1821,8 @@ No se aplica la migración automáticamente a Supabase desde estas pruebas.
 | Ventana fija o revocación de `EXECUTE` a `anon` para `permanencia_promedio`/`personas_distintas` (S-37, limitación conocida) | 6 |
 
 > Revisado al cerrar la Etapa 5 (2026-11-12): **ninguna de las filas anteriores está resuelta
-> todavía**. `tests/unit` y `tests/rls` están vacíos, no existe ninguna ruta `/admin` y
+> todavía**. Desde el 2026-11-19 `tests/unit` prueba la continuación del QR (S-48); los tests
+> de RLS siguen pendientes, no existe ninguna ruta `/admin` y
 > `requireAdmin()` sigue apoyándose en `getClaims()`. Por eso no se elimina ninguna fila.
 
 ## Control de cambios

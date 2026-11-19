@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { FormularioLogin } from "@/components/auth/FormularioLogin";
 import { normalizarDestinoInterno, portadaDesdeScan } from "@/lib/auth/redirects";
 import { obtenerSesion } from "@/lib/auth/session";
+import { obtenerScanPendiente } from "@/lib/scan/pendiente";
 import { modoDesdeIndicadorScan } from "@/lib/validacion/scan";
 
 type Props = {
@@ -24,20 +25,21 @@ function mensajeDeError(codigo: string | null): string | null {
 
 export default async function PaginaLogin({ searchParams }: Props) {
   const params = await searchParams;
-  // Indicador cerrado `desde=scan&modo=...`: solo cambia los mensajes y el destino de
-  // vuelta. Si no viene o no es válido, todo sigue exactamente como antes.
-  const modoScan = modoDesdeIndicadorScan(params.desde, params.modo);
+  const pendiente = await obtenerScanPendiente();
+  const modoScan = pendiente?.modo ?? modoDesdeIndicadorScan(params.desde, params.modo);
 
   const sesion = await obtenerSesion();
-  // Con sesión activa no hay nada que hacer aquí: la portada muestra el estado y el aviso.
-  // Si venimos de un escaneo, la portada conserva el indicador para mostrar el paso 2.
-  if (sesion) redirect(modoScan ? portadaDesdeScan(modoScan) : "/");
+  if (sesion) {
+    redirect(pendiente ? "/scan" : modoScan ? portadaDesdeScan(modoScan) : "/");
+  }
 
-  const destino = modoScan
-    ? portadaDesdeScan(modoScan)
-    : normalizarDestinoInterno(
-        typeof params.next === "string" ? params.next : null,
-      );
+  const destino = pendiente
+    ? "/scan"
+    : modoScan
+      ? portadaDesdeScan(modoScan)
+      : normalizarDestinoInterno(
+          typeof params.next === "string" ? params.next : null,
+        );
   const mensaje = mensajeDeError(
     typeof params.error === "string" ? params.error : null,
   );
@@ -77,7 +79,9 @@ export default async function PaginaLogin({ searchParams }: Props) {
 
         {modoScan && (
           <p className="mt-2 text-center text-sm leading-6 text-tenue">
-            Después vuelve a escanear el QR.
+            {pendiente
+              ? "Crea tu cuenta o inicia sesión para continuar con este escaneo. Lo conservamos por 10 minutos; abre el correo de confirmación en este mismo navegador."
+              : "El escaneo ya no está disponible. Después de ingresar, vuelve a escanear el QR."}
           </p>
         )}
 
