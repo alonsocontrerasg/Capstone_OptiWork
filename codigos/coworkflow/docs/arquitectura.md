@@ -279,7 +279,7 @@ Notas de diseño:
 
 | # | Invariante | Cómo se garantiza |
 | --- | --- | --- |
-| I1 | `ocupacion_actual.cantidad` = nº de sesiones abiertas de la zona | Trigger `AFTER INSERT/UPDATE/DELETE` en `sesiones`, en la misma transacción |
+| I1 | `ocupacion_actual.cantidad` = nº de sesiones abiertas de la zona | Triggers `AFTER STATEMENT`, bloqueo por zona antes del COUNT y nueva instantánea READ COMMITTED (S-47) |
 | I2 | Un usuario tiene como máximo una sesión abierta | Índice único parcial + validación en la RPC |
 | I3 | Cooldown: máx. 1 evento por usuario cada 30 s | `SELECT … FOR UPDATE` sobre la última fila de `eventos_scan` dentro de la RPC |
 | I4 | Nadie escribe `sesiones`/`eventos_scan` fuera de la RPC | RLS sin políticas de `INSERT/UPDATE/DELETE` |

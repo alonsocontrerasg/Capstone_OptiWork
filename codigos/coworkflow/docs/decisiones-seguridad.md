@@ -62,6 +62,7 @@
 | S-44 | Transición post-login del escaneo: indicador sin token (`desde=scan` + `modo` cerrado) | 6 |
 | S-45 | Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente | 6 |
 | S-46 | `GET /scan` lee la zona del token con un UUID validado, solo para presentación | 6 |
+| S-47 | Contador serializado por zona antes del COUNT y triggers por sentencia | 6 |
 
 ---
 
@@ -389,16 +390,17 @@ un bug futuro dejan el número por encima o por debajo de la realidad. Un contad
 semáforo «Lleno» falso; uno deflactado rompe la confianza en el sistema y podría usarse para ocultar
 sobreaforo.
 
-**Por qué esta solución.** Los contadores incrementales son rápidos pero acumulan error; los
-recálculos son exactos pero caros si se hacen siempre. Este diseño combina ambos: camino rápido para
-la latencia (trigger) y camino exacto periódico (job), con un índice parcial que hace el `COUNT`
-barato. Además el snapshot que se guarda y el contador quedan coherentes entre sí.
+**Por qué esta solución.** Tanto el trigger como el job recalculan con `COUNT` sobre el índice
+parcial de sesiones abiertas. Desde S-47, ambos bloquean primero el contador de la zona y luego
+cuentan con una instantánea nueva. El trigger agrupa por zona y sentencia para no repetir el
+recuento por cada fila de un lote. El snapshot y el contador quedan coherentes en esa transacción.
 
 **Dónde se implementa.** `..._triggers_ocupacion.sql` + `coworkflow_snapshot` (Etapa 2); el job es
 la verificación oficial del invariante I6 de `docs/arquitectura.md`.
 
-**Tradeoff.** La cifra puede estar desviada hasta 5 minutos en el peor caso, lo que es irrelevante
-para un semáforo de aforo.
+**Tradeoff.** La reconciliación es una reparación adicional de deriva previa o de operaciones
+administrativas fuera del flujo normal; desde S-47 las escrituras concurrentes soportadas no
+dependen de esperar al próximo job para corregir el contador.
 
 ### S-14 · Verificación obligatoria de RLS después de aplicar migraciones a mano
 
@@ -1726,6 +1728,39 @@ decisión real la toma `registrar_scan` y la pantalla de resultado muestra
 abrió el enlace; no sigue avanzando en pantalla.
 
 ---
+
+### S-47 · Contador serializado por zona antes del COUNT
+
+**Problema reproducido.** Dos usuarios diferentes insertan sesiones en transacciones solapadas.
+Ambos recuentos antiguos pueden ver solo una sesión. El segundo UPSERT espera al primero, pero
+guarda el valor calculado ANTES de esperar: quedan dos sesiones abiertas y un contador de uno.
+El advisory lock de `registrar_scan` es por usuario y no protege esta carrera entre personas.
+
+**Decisión.** La migración 11 crea la fila agregada si falta, obtiene `FOR UPDATE` sobre ella y
+solo entonces ejecuta el `COUNT` en una sentencia separada. `refrescar_ocupacion` sigue siendo
+`VOLATILE`: en READ COMMITTED el recuento ve los commits ocurridos mientras esperaba el bloqueo.
+La exclusión se limita a una zona y permanece hasta COMMIT/ROLLBACK. No se cambia la RPC ni la
+publicación de Realtime; la fila agregada sigue sin identificadores de personas.
+
+Los tres triggers `AFTER STATEMENT` usan tablas de transición para recalcular una sola vez por
+zona afectada, incluyendo origen y destino de una reasignación. Trigger y `cron_snapshot`
+adquieren los bloqueos en orden UUID ascendente, reduciendo ciclos de bloqueo entre lotes de
+varias zonas. La migración se aplica en una transacción y reconcilia los contadores existentes.
+Se conservan `SECURITY DEFINER`, `search_path` fijo y los privilegios EXECUTE anteriores.
+
+**Verificación.** `tests/integration/ocupacion-concurrencia.test.mjs` usa PostgreSQL real y
+conexiones independientes. La prueba de dos entradas falla sin la migración (1 ≠ 2). Con ella
+se verifican entradas, salidas, mezcla de ambas, snapshot concurrente, rollback, zonas
+independientes, cambios de zona y borrados, cierre automático de un lote, 12 llamadas paralelas
+por modo a la RPC autenticada, reaplicación de la migración y privilegios. El runner es
+`node:test` para esta integración SQL; Vitest sigue siendo la herramienta prevista para las
+pruebas de dominio. Ver `tests/integration/README.md` para ejecutar y reproducir la regresión.
+
+**Límites.** El protocolo está diseñado para READ COMMITTED, el aislamiento predeterminado de
+PostgreSQL/PostgREST. Con REPEATABLE READ o SERIALIZABLE pueden requerirse reintentos por error
+40001; transacciones administrativas que acumulen varias sentencias y zonas en órdenes distintos
+también pueden requerir reintentos por 40P01. No se garantiza ausencia de todo deadlock arbitrario.
+No se aplica la migración automáticamente a Supabase desde estas pruebas.
 
 ## Pendientes de documentar en las próximas etapas
 

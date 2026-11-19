@@ -215,7 +215,15 @@ lados ya coinciden.
 | `trg_proteger_rol` | `profiles` (BEFORE UPDATE) | `proteger_rol()` | bloquea cambiar `rol` si el JWT es `authenticated`/`anon` |
 | `trg_validar_timezone_zona` | `zonas` (BEFORE INSERT/UPDATE) | `validar_timezone_zona()` | rechaza `timezone` que no exista en `pg_timezone_names` |
 | `trg_zonas_crear_ocupacion` | `zonas` (AFTER INSERT) | `crear_ocupacion_inicial()` | crea la fila de `ocupacion_actual` |
-| `trg_sesiones_actualizar_ocupacion` | `sesiones` (AFTER INSERT/UPDATE/DELETE) | `actualizar_ocupacion()` | recalcula `ocupacion_actual` en la misma transacción |
+| `trg_sesiones_actualizar_ocupacion` | `sesiones` (AFTER INSERT, STATEMENT) | `actualizar_ocupacion()` | recalcula una vez por zona del lote, con bloqueo previo al COUNT |
+| `trg_sesiones_actualizar_ocupacion_update` | `sesiones` (AFTER UPDATE, STATEMENT) | `actualizar_ocupacion()` | recalcula zonas anteriores y nuevas en orden UUID |
+| `trg_sesiones_actualizar_ocupacion_delete` | `sesiones` (AFTER DELETE, STATEMENT) | `actualizar_ocupacion()` | recalcula las zonas de las sesiones eliminadas |
+
+La migración `20261119000000_ocupacion_concurrente.sql` reemplaza el trigger por fila.
+`refrescar_ocupacion` bloquea la fila de `ocupacion_actual` con `FOR UPDATE` antes de contar,
+y hace el `COUNT` en otra sentencia `VOLATILE`: en READ COMMITTED ve los commits ocurridos
+durante la espera. El bloqueo dura hasta terminar la transacción. Trigger y `cron_snapshot`
+recorren las zonas por UUID ascendente; no existe un bloqueo global entre zonas (S-47).
 
 ## Funciones y privilegios EXECUTE
 
