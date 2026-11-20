@@ -16,8 +16,8 @@ import type {
  * puede usar `next/dynamic` con `ssr: false`: Recharts queda fuera del HTML del servidor y de
  * la hidratación inicial, y sus estilos inline por CSSOM nunca chocan con la CSP.
  *
- * Mientras llega el chunk se muestra un esqueleto con las mismas dimensiones para que no haya
- * salto de layout (CLS). El `aria-busy` avisa a los lectores de pantalla.
+ * Mientras llega el chunk se reserva espacio con un esqueleto. El CLS se mide en la suite
+ * de producción; la altura final puede variar según el texto. `aria-busy` anuncia la espera.
  */
 
 type Props = {

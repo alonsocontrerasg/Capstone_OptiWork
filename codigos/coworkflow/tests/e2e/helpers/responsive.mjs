@@ -27,7 +27,7 @@ export async function medirResponsive(page) {
         .filter((e)=>parseFloat(getComputedStyle(e).fontSize)<14).map((e)=>({texto:texto(e),fuente:getComputedStyle(e).fontSize})).slice(0,30),
       textosCortados: elementos.filter((e)=>["P","H1","H2","H3","LABEL"].includes(e.tagName)&&getComputedStyle(e).textOverflow==="ellipsis"&&e.scrollWidth>e.clientWidth+1)
         .map((e)=>({texto:texto(e),...caja(e)})),
-      medios: [...document.querySelectorAll('img,video,main [role="img"] svg')].filter(visible).map((e)=>({elemento:e.tagName,...caja(e)})),
+      medios: [...document.querySelectorAll('img,video,main [role="img"] svg')].filter(visible).map((e)=>({elemento:e.tagName,qr:Boolean(e.closest('[aria-label^="Código QR"]')),...caja(e)})),
     };
   });
 }
@@ -40,6 +40,10 @@ export function comprobarResponsive(medida, nombre) {
   expect(medida.textosPequenos,`${nombre}: texto legible`).toEqual([]);
   expect(medida.textosCortados,`${nombre}: texto cortado`).toEqual([]);
   expect(medida.controlesPequenos,`${nombre}: áreas táctiles`).toEqual([]);
+  for(const medio of medida.medios.filter((m)=>m.qr)) {
+    expect(Math.abs(medio.ancho-medio.alto),`${nombre}: QR sin deformación`).toBeLessThanOrEqual(1);
+    expect(medio.ancho,`${nombre}: ancho de QR`).toBeLessThanOrEqual(medida.pantalla);
+  }
   if(medida.pantalla<1024) {
     expect(medida.scrollInterno,`${nombre}: sin scroll lateral interno en móvil`).toEqual([]);
     expect(medida.desbordamientos,`${nombre}: elementos fuera de pantalla`).toEqual([]);

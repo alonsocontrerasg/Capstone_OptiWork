@@ -67,6 +67,7 @@
 | S-49 | Sesión administrativa revocable | 6 |
 | S-50 | Configuración transaccional y CSV seudonimizado | 6 |
 | S-51 | CI aislado con PostgreSQL, Auth y navegador | 6 |
+| S-52 | Protocolo de Realtime alineado al origen configurado | 6 |
 
 ---
 
@@ -1866,6 +1867,15 @@ confirmaciones ni se agregan dominios automáticamente. Ver docs/operacion.md.
 > Etapa 6: administración, CSV, RLS y sesión revocable implementados en S-49..S-51.
 > La evidencia se conserva en los checks del PR. SMTP y la prueba manual tras el despliegue
 > siguen el procedimiento de operacion.md.
+
+### S-52 · Protocolo de Realtime y pruebas móviles
+
+La CSP deriva el WebSocket del origen exacto configurado para Supabase: `https` usa `wss`
+y `http` usa `ws`. Antes se fijaba siempre `wss`, lo que bloqueaba `ws://127.0.0.1:54321`
+en las pruebas locales y hacía que WebKit mostrara la frontera de error del contador.
+No se añaden comodines ni destinos nuevos al desplegar con Supabase HTTPS. La revisión móvil
+comprueba también la conexión «En vivo» en ambos motores; usuarios, horarios y valores de
+estrés se crean exclusivamente en servicios locales descartables.
 
 ## Control de cambios
 

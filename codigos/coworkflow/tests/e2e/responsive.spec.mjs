@@ -45,6 +45,7 @@ for(const [width,height] of [[320,568],[360,640],[390,844],[430,932],[568,320],[
     const datos=[];
     async function revisar(ruta,nombre){
       await page.goto(ruta);await expect(page.locator("main")).toBeVisible();
+      if(ruta==="/dashboard") await expect(page.getByText("En vivo",{exact:true})).toBeVisible();
       await expect(page.getByRole("heading",{name:"Algo salió mal",exact:true})).toHaveCount(0);
       if(ruta==="/dashboard/estadisticas"){
         await page.getByTestId("graficos-diferidos").scrollIntoViewIfNeeded();
@@ -67,6 +68,7 @@ for(const [width,height] of [[320,568],[360,640],[390,844],[430,932],[568,320],[
     await revisar("/qr","qr");
     await expect(page.locator('main [role="img"] svg').first()).toBeVisible();
     datos[datos.length-1]= {ruta:"/qr",nombre:"qr",...await medirResponsive(page)};
+    if([320,390,844].includes(width)) await page.screenshot({path:`test-results/responsive/${testInfo.project.name}-qr-${width}.png`,fullPage:true,scale:"css"});
     await page.getByRole("button",{name:"Actualizar ahora"}).first().click();
     const payload=`v1.${zona}.entrada.${Math.floor(Date.now()/45000)}`;
     const token=payload+"."+createHmac("sha256","ab".repeat(32)).update(payload).digest("hex");
