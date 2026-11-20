@@ -57,7 +57,7 @@ Usar los valores **locales** de `API_URL`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `DB_U
 `COWORKFLOW_E2E_DATABASE_URL`. Definir también:
 
 ```text
-NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 NEXT_PUBLIC_ZONA_POR_DEFECTO=prueba-e2e
 QR_TOKEN_SECRET=abababababababababababababababababababababababababababababababab
 ```

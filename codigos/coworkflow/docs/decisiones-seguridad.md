@@ -1213,6 +1213,9 @@ pide el enlace mágico debe esperar.
 
 ### S-36 · `getClaims()` no detecta revocación; `/admin` usará `getUser()`
 
+> Sustituida para administración por S-49: getUser se combina con la comprobación de
+> session_id en auth.sessions. La identidad consultada en Auth no basta por sí sola.
+
 **Decisión.** `obtenerSesion()` (y por tanto los guards de lectura) usa `supabase.auth.getClaims()`, que
 valida firma y expiración del JWT, y lee el rol de `profiles` en cada llamada (S-27). Las acciones
 sensibles de `/admin` (Etapa 6: guardar aforo, umbrales y horario, exportar CSV, historial con datos
