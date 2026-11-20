@@ -87,3 +87,27 @@ test("admin guarda horario, exporta y pierde acceso al revocar su sesión", asyn
   const exportar = await page.request.get("/api/admin/exportar"); expect(exportar.status()).toBe(401);
   const publico = await request.get("/api/admin/exportar"); expect(publico.status()).toBe(401);
 });
+
+test("usuarios reales de Auth no leen sesiones ajenas ni escriben fuera de las RPC", async () => {
+  const clientes = [];
+  for (let i=0;i<2;i++) {
+    const email=`rls-${randomUUID()}@example.test`;
+    const alta=await adminCliente.auth.admin.createUser({email,password:clave,email_confirm:true});
+    expect(alta.error).toBeNull();const id=alta.data.user.id;creados.push(id);
+    const cliente=createClient(base,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+    expect((await cliente.auth.signInWithPassword({email,password:clave})).error).toBeNull();
+    await db.query("insert into public.sesiones(user_id,zona_id) values ($1,$2)",[id,zona]);
+    clientes.push({cliente,id});
+  }
+  for (const {cliente,id} of clientes) {
+    const propias=await cliente.from("sesiones").select("user_id");expect(propias.error).toBeNull();
+    expect(propias.data).toEqual([{user_id:id}]);
+    expect((await cliente.from("sesiones").insert({user_id:id,zona_id:zona})).error).not.toBeNull();
+    expect((await cliente.from("eventos_scan").insert({user_id:id,resultado:"entrada_ok"})).error).not.toBeNull();
+    expect((await cliente.from("profiles").update({rol:"admin"}).eq("id",id)).error).not.toBeNull();
+    expect((await cliente.from("eventos_scan").select("id")).data).toEqual([]);
+  }
+  const anon=createClient(base,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+  for(const tabla of ["profiles","sesiones","eventos_scan","app_secrets"]){expect((await anon.from(tabla).select("*")).error).not.toBeNull();}
+  expect((await anon.from("ocupacion_actual").select("cantidad")).error).toBeNull();
+});

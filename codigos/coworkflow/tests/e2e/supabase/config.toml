@@ -13,7 +13,7 @@ major_version = 17
 enabled = false
 [studio]
 enabled = false
-[inbucket]
+[local_smtp]
 enabled = true
 port = 54324
 [auth]

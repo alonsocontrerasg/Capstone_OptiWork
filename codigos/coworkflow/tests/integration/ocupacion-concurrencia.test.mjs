@@ -113,6 +113,9 @@ describe("ocupación concurrente en PostgreSQL", { concurrency: false }, () => {
     await pool.query(`
       create schema auth;
       create table auth.users (id uuid primary key);
+      create table auth.sessions(id uuid primary key, user_id uuid references auth.users, not_after timestamptz);
+      create function auth.jwt() returns jsonb language sql stable as
+      $$ select coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb $$;
       create function auth.uid() returns uuid language sql stable as
       $$ select (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid $$;
       grant usage on schema auth to anon, authenticated, service_role;
@@ -130,6 +133,9 @@ describe("ocupación concurrente en PostgreSQL", { concurrency: false }, () => {
     }
     if (process.env.COWORKFLOW_TEST_BASELINE !== "1") {
       await pool.query(await readFile(path.join(carpetaSql, migracion), "utf8"));
+      for (const posterior of (await readdir(carpetaSql)).filter((f) => f.endsWith(".sql") && f > migracion).sort()) {
+        await pool.query(await readFile(path.join(carpetaSql, posterior), "utf8"));
+      }
     }
     await pool.query("insert into public.app_secrets(clave, valor) values ('qr_token_secret', $1)", [secreto]);
   }, { timeout: 60000 });
@@ -138,7 +144,14 @@ describe("ocupación concurrente en PostgreSQL", { concurrency: false }, () => {
     await pool?.end();
     if (administrador) {
       try {
-        if (baseCreada) await administrador.query(`drop database "${nombre}" with (force)`);
+        if (baseCreada) {
+          for (let intento=0;intento<100;intento++) {
+            const conexiones=await administrador.query("select 1 from pg_stat_activity where datname=$1",[nombre]);
+            if (!conexiones.rowCount) break;
+            await esperar(20);
+          }
+          await administrador.query(`drop database "${nombre}"`);
+        }
         for (const rol of rolesCreados.reverse()) await administrador.query(`drop role ${rol}`);
       } finally { await administrador.end(); }
     }
