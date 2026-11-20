@@ -58,7 +58,7 @@ jobs:
         with:
           version: 3.2.0
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: supabase start --workdir tests/e2e
       - name: Variables locales de prueba
         run: |
@@ -75,6 +75,8 @@ jobs:
           echo "QR_TOKEN_SECRET=abababababababababababababababababababababababababababababababab" >> "$GITHUB_ENV"
       - run: node scripts/preparar-e2e.mjs
       - run: npm run test:e2e
+        env:
+          RESPONSIVE_BASELINE: "1"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
