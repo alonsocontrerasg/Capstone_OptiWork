@@ -1,0 +1,87 @@
+name: Verificaciones
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: verificaciones-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    working-directory: codigos/coworkflow
+jobs:
+  calidad-y-sql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: pruebas-locales
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      COWORKFLOW_TEST_DATABASE_URL: postgresql://postgres:pruebas-locales@127.0.0.1:5432/postgres
+      NEXT_PUBLIC_SUPABASE_URL: https://build-check.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: build-check-only
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      NEXT_PUBLIC_ZONA_POR_DEFECTO: prueba-e2e
+      QR_TOKEN_SECRET: abababababababababababababababababababababababababababababababab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: codigos/coworkflow/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run test:rls
+      - run: npm run test:concurrencia
+      - run: npm run build
+  navegador-y-supabase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: codigos/coworkflow/package-lock.json
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 3.2.0
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: supabase start --workdir tests/e2e
+      - name: Variables locales de prueba
+        run: |
+          supabase status --workdir tests/e2e -o env > /tmp/supabase-e2e.env
+          set -a
+          source /tmp/supabase-e2e.env
+          set +a
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+          echo "COWORKFLOW_E2E_DATABASE_URL=$DB_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_ZONA_POR_DEFECTO=prueba-e2e" >> "$GITHUB_ENV"
+          echo "QR_TOKEN_SECRET=abababababababababababababababababababababababababababababababab" >> "$GITHUB_ENV"
+      - run: node scripts/preparar-e2e.mjs
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: navegador-informe
+          path: |
+            codigos/coworkflow/playwright-report
+            codigos/coworkflow/test-results
+          retention-days: 7
+      - run: supabase stop --workdir tests/e2e --no-backup
+        if: always()
