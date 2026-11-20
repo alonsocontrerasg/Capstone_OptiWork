@@ -79,6 +79,7 @@ test("admin guarda horario, exporta y pierde acceso al revocar su sesión", asyn
   await expect(page.getByRole("button",{ name:"Cerrar sesión",exact:true })).toBeVisible();
   await page.goto("/admin");
   await expect(page.getByRole("heading",{ name:"Administración",exact:true })).toBeVisible();
+  await expect(page.getByLabel("Apertura Lunes",{exact:true})).toHaveValue("00:00");
   await page.getByLabel("Aforo máximo").fill("120");
   await page.getByRole("button",{ name:"Guardar configuración" }).click();
   await expect(page.getByRole("status").filter({ hasText:"Configuración guardada." })).toBeVisible();
