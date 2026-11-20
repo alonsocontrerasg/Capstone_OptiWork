@@ -20,7 +20,15 @@ const esquemaPendiente = z.object({
   venceAt: z.number().int(),
 });
 type ScanPendiente = z.infer<typeof esquemaPendiente>;
-const memoria = new Map<string, ScanPendiente>();
+// Next carga el Route Handler y los RSC como entradas distintas en desarrollo. Compartir
+// por proceso evita perder el escaneo entre /auth/scan y /login o con una recarga de módulos.
+// Producción sigue exigiendo Redis: nunca depende de este almacén.
+const globalDesarrollo = globalThis as typeof globalThis & {
+  __optiworkScansPendientes?: Map<string, ScanPendiente>;
+};
+const memoria = process.env.NODE_ENV === "production"
+  ? new Map<string, ScanPendiente>()
+  : (globalDesarrollo.__optiworkScansPendientes ??= new Map<string, ScanPendiente>());
 let redis: Redis | undefined;
 
 function clienteRedis(): Redis | null {

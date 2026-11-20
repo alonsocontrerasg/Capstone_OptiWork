@@ -55,6 +55,7 @@ test("registro con correo, consentimiento, entrada y salida sin repetir el QR in
   await page.getByRole("checkbox").check();
   await page.getByRole("button",{ name:"Acepto y continúo" }).click();
   await expect(page.getByRole("button",{ name:/Confirmar.*entrada/i })).toBeVisible();
+  await page.screenshot({path:"test-results/confirmacion-mobile.png",fullPage:true});
   expect(await cantidad()).toBe(inicial);
   await page.getByRole("button",{ name:/Confirmar.*entrada/i }).click();
   await expect(page.getByRole("heading",{ name:"Entrada registrada",exact:true })).toBeVisible();
@@ -81,6 +82,7 @@ test("admin guarda horario, exporta y pierde acceso al revocar su sesión", asyn
   await page.getByLabel("Aforo máximo").fill("120");
   await page.getByRole("button",{ name:"Guardar configuración" }).click();
   await expect(page.getByRole("status").filter({ hasText:"Configuración guardada." })).toBeVisible();
+  await page.screenshot({path:"test-results/admin-mobile.png",fullPage:true});
   expect((await db.query("select aforo_max from public.zonas where id=$1",[zona])).rows[0].aforo_max).toBe(120);
   const descarga = page.waitForEvent("download"); await page.getByRole("link",{ name:"Exportar CSV" }).click();
   expect((await descarga).suggestedFilename()).toBe("historial-optiwork.csv");
