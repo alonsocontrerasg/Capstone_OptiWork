@@ -8,8 +8,9 @@ import { loginDesdeScan, portadaDesdeScan } from "@/lib/auth/redirects";
 import { obtenerSesion } from "@/lib/auth/session";
 import { tieneConsentimiento } from "@/lib/dominio/consentimiento";
 import { textoEstadoHorario } from "@/lib/dominio/tiempo";
+import { obtenerScanPendiente, TOKEN_SCAN_PENDIENTE } from "@/lib/scan/pendiente";
 import { obtenerZonaPorId } from "@/lib/supabase/zonas";
-import { esquemaModoScan, esquemaQueryScan } from "@/lib/validacion/scan";
+import { esquemaQueryScan } from "@/lib/validacion/scan";
 
 export const metadata: Metadata = {
   title: "Marcar asistencia",
@@ -61,55 +62,35 @@ function horaLocalEnTexto(ahora: Date, timezone: string): string | null {
   }
 }
 
-/** Modo de `?modo=` validado con el enum cerrado; si no es un string válido, `null`. */
-function modoDeParametro(
-  valor: string | string[] | undefined,
-): "entrada" | "salida" | null {
-  if (typeof valor !== "string") return null;
-  const parseado = esquemaModoScan.safeParse(valor);
-  return parseado.success ? parseado.data : null;
-}
-
 /**
- * `/scan` — confirmación del escaneo del QR (S-15, S-16, S-33, S-46).
- *
- * Este GET **no muta nada**: valida la sesión, el consentimiento y la forma del token, y
- * muestra la confirmación. La escritura ocurre en `POST /api/scan`, así que seguir el enlace
- * (o que un preview lo abra) no registra asistencia.
- *
- * Para la presentación se hace **una** lectura pública de `zonas` con el `zona_uuid` del
- * token (nombre, hora local y estado del horario): el id se valida como UUID antes de
- * consultar y el resultado no autoriza nada (S-46).
- *
- * Sin sesión se redirige a `/login?desde=scan&modo=<entrada|salida>` (o a `/login` si el
- * modo no es válido) **sin el token**: la URL de login no debe llevar el token en el
- * historial ni en los logs del servidor. Lo mismo al volver a la portada por falta de
- * consentimiento. El indicador solo alimenta los mensajes de "vuelve a escanear".
+ * GET solo muestra la confirmación. Sin sesión/consentimiento, un Route Handler conserva
+ * un QR válido durante el alta (S-48). Nunca se registra asistencia antes del POST.
  */
 export default async function PaginaScan({ searchParams }: Props) {
   const params = await searchParams;
 
-  // Solo `?modo=` (enum cerrado) alimenta el indicador de transición: en estas ramas no se
-  // lee `params.t`. Si falta o es inválido, los redirects quedan exactamente como antes.
-  const modoTransicion = modoDeParametro(params.modo);
-
-  const sesion = await obtenerSesion();
-  if (!sesion) {
-    redirect(modoTransicion ? loginDesdeScan(modoTransicion) : "/login");
-  }
-  if (!tieneConsentimiento(sesion.perfil)) {
-    redirect(modoTransicion ? portadaDesdeScan(modoTransicion) : "/");
-  }
-
+  const error = typeof params.error === "string" ? params.error : null;
   const validado = esquemaQueryScan.safeParse({
     t: params.t,
     modo: params.modo,
   });
+  const pendiente = !params.t && !error ? await obtenerScanPendiente() : null;
+  const token = !error && validado.success
+    ? validado.data.t
+    : pendiente ? TOKEN_SCAN_PENDIENTE : null;
+  const datos = pendiente ?? (validado.success ? datosDelToken(validado.data.t) : null);
+  const sesion = await obtenerSesion();
+  if (token) {
+    if (validado.success && (!sesion || !tieneConsentimiento(sesion.perfil))) {
+      redirect(`/auth/scan?t=${encodeURIComponent(validado.data.t)}`);
+    }
+    if (!sesion) redirect(datos?.modo ? loginDesdeScan(datos.modo) : "/login");
+    if (!tieneConsentimiento(sesion.perfil)) {
+      redirect(datos?.modo ? portadaDesdeScan(datos.modo) : "/");
+    }
+  }
 
-  // La zona solo se consulta con el `zona_uuid` de un token con forma esperada.
-  // `obtenerZonaPorId` vuelve a validar que sea UUID antes de consultar (S-46): si no lo es,
-  // devuelve `null` sin tocar Supabase.
-  const datos = validado.success ? datosDelToken(validado.data.t) : null;
+  // Solo para presentación: el marcador "pendiente" nunca permite elegir zona o modo.
   const zona = datos ? await obtenerZonaPorId(datos.zonaId) : null;
   const ahora = new Date();
   const horaLocal = zona ? horaLocalEnTexto(ahora, zona.timezone) : null;
@@ -118,10 +99,10 @@ export default async function PaginaScan({ searchParams }: Props) {
   return (
     <div className="flex flex-1 flex-col">
       <main className="mx-auto w-full max-w-md flex-1 px-5 py-10 md:px-8">
-        {validado.success ? (
+        {token ? (
           <ConfirmacionScan
-            token={validado.data.t}
-            modo={datos?.modo ?? validado.data.modo ?? null}
+            token={token}
+            modo={datos?.modo ?? null}
             nombreZona={zona?.nombre ?? null}
             horaLocal={horaLocal}
             textoFueraHorario={textoFueraHorario}
@@ -132,10 +113,14 @@ export default async function PaginaScan({ searchParams }: Props) {
               <QrCode aria-hidden className="size-7" />
             </span>
             <h1 className="mt-4 text-xl font-semibold tracking-tight">
-              Este enlace no incluye un QR
+              {error === "servicio" ? "No pudimos conservar el escaneo"
+                : error === "limite" ? "Demasiados intentos"
+                : "El escaneo no está disponible"}
             </h1>
             <p className="mt-2 text-sm leading-6 text-tenue">
-              Vuelve a escanear el QR de entrada o salida con la cámara de tu celular.
+              {error === "servicio" ? "Espera unos segundos y vuelve a escanear el QR."
+                : error === "limite" ? "Espera un minuto antes de volver a escanear."
+                : "El escaneo pudo haber vencido. Vuelve a escanear el QR de entrada o salida."}
             </p>
             <Link href="/" className="btn-secundario mt-5 w-full">
               Volver al inicio

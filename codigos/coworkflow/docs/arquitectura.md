@@ -4,7 +4,9 @@
 > Sistema de monitoreo de ocupación del cowork del Hub Providencia (proyecto universitario,
 > presupuesto $0, todo sobre planes gratuitos).
 >
-> Estado: aprobado para implementación. Las etapas 2–6 completan el detalle.
+> Estado actual: implementadas autenticación, QR, scan, dashboard, administración y pruebas.
+> Este documento conserva decisiones del plan inicial. README.md y docs/operacion.md describen
+> la instalación, el despliegue y los pendientes operativos actuales.
 > Las decisiones de seguridad se justifican por separado en `docs/decisiones-seguridad.md`.
 
 ---
@@ -138,16 +140,19 @@ distintas de versiones anteriores de Next.js. Se respetan en todas las etapas:
 
 1. El usuario escanea con la cámara nativa el QR de la entrada o de la salida. El QR contiene
    `https://<host>/scan?modo=entrada&t=<token>`.
-2. `GET /scan` **solo renderiza**: valida sesión, muestra zona y modo y pide confirmación. No
-   muta nada (`S-05`).
-   - **Sin sesión** → `redirect('/login')` **descartando el token**; al volver, el usuario
-     escanea de nuevo (`S-12`). El token no viaja en `?next=`, ni en cookie, ni en
-     `sessionStorage`, ni en `localStorage`.
+2. `GET /scan` valida sesión, muestra zona y modo y pide confirmación. No registra asistencia.
+   - **Sin sesión o consentimiento** → `/auth/scan` verifica la firma y la ventana del QR y
+     conserva en Redis solo zona, modo y vencimiento durante 10 minutos. Una cookie httpOnly
+     opaca permite volver a `/scan` después del login/registro y del consentimiento (`S-48`,
+     sustituye el reescaneo de `S-12`/`S-44`). El QR no viaja en `next`, correos ni almacenamiento
+     del navegador. La confirmación por correo debe abrirse en el mismo navegador y dominio.
 3. El Client Component hace `POST /api/scan` con `{ t }`. El `modo` de la query string es solo
    presentación: el modo real está firmado dentro del token (`S-06`).
 4. `/api/scan`: comprueba mismo origen, valida el body con zod (`{ t }`), aplica rate limit
    (usuario + hash de IP) y llama `rpc('registrar_scan', { p_token })` con el JWT del usuario. La
-   ruta **no** verifica la firma ni interpreta zona/modo: solo transporta el token.
+   ruta transporta los QR normales sin modificarlos. Si recibe el marcador `pendiente`, exige
+   consentimiento y canjea atómicamente su registro de Redis (`GETDEL`); solo entonces firma
+   un token vigente con la zona y modo guardados. La continuación es de un solo uso.
 5. La **RPC**, en una sola transacción, parsea el token, verifica el HMAC-SHA256 contra
    `app_secrets.qr_token_secret` (comparando `digest`, `S-22`) y acepta la ventana actual y la
    anterior; luego valida `auth.uid()`, consentimiento (`sin_consentimiento`), límite de 10 intentos
@@ -279,7 +284,7 @@ Notas de diseño:
 
 | # | Invariante | Cómo se garantiza |
 | --- | --- | --- |
-| I1 | `ocupacion_actual.cantidad` = nº de sesiones abiertas de la zona | Trigger `AFTER INSERT/UPDATE/DELETE` en `sesiones`, en la misma transacción |
+| I1 | `ocupacion_actual.cantidad` = nº de sesiones abiertas de la zona | Triggers `AFTER STATEMENT`, bloqueo por zona antes del COUNT y nueva instantánea READ COMMITTED (S-47) |
 | I2 | Un usuario tiene como máximo una sesión abierta | Índice único parcial + validación en la RPC |
 | I3 | Cooldown: máx. 1 evento por usuario cada 30 s | `SELECT … FOR UPDATE` sobre la última fila de `eventos_scan` dentro de la RPC |
 | I4 | Nadie escribe `sesiones`/`eventos_scan` fuera de la RPC | RLS sin políticas de `INSERT/UPDATE/DELETE` |
@@ -537,7 +542,10 @@ aditivas.
 
 Detalles de configuración previstos (`vitest.config.mts`):
 
-- `test.environment = 'node'`, `test.include = ['tests/**/*.test.ts']`.
+- Implementado: `test.environment = 'node'`, `test.include = ['tests/unit/**/*.test.{ts,tsx}']`.
+  `npm run test:unit` comprueba el QR vigente, el alta/callback, consentimiento, vencimiento,
+  canje simultáneo y rechazo de cookies inventadas. Supabase y Redis se sustituyen por dobles
+  de prueba; esta suite no envía correos ni escribe asistencia en producción.
 - Alias `@/` resuelto con `resolve.alias` de Node (`node:path`), sin agregar
   `vite-tsconfig-paths`.
 - Sin `jsdom` ni Testing Library: el spec pide lógica de negocio y RLS, no tests de componentes.
@@ -573,6 +581,6 @@ formato, para que el informe final se arme por acumulación.
 
 ---
 
-**Siguiente etapa (2):** esquema SQL completo con RLS, funciones, triggers y `pg_cron`, más
-`supabase/verificacion.sql`, `supabase/seed.sql` y `docs/modelo-datos.md`. No se escribe nada de
-eso hasta la confirmación explícita de la Etapa 1.
+**Estado de entrega:** las etapas de SQL, Auth, QR, scan, dashboard y administración están
+implementadas. El PR conserva la publicación a main para revisión posterior. La migración
+administrativa y la prueba manual del correo real siguen docs/operacion.md.

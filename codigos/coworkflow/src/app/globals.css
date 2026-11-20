@@ -10,7 +10,21 @@
   color-scheme: light;
 }
 
+body { overflow-wrap: anywhere; }
+main, fieldset { min-width: 0; }
+fieldset { min-inline-size: 0; }
+/* 16 px evita el zoom automático de los campos en iOS. No se limita el zoom del usuario. */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  font-size: 1rem;
+}
+img, video { max-width: 100%; height: auto; }
+
 @theme {
+  --text-xs: 0.875rem;
+  --text-xs--line-height: 1.5;
   --color-fondo: #f6f7f9;
   --color-superficie: #ffffff;
   --color-tinta: #111827;
@@ -37,16 +51,17 @@
 
 @theme inline {
   --font-sans: var(--font-inter);
-  --font-display: var(--font-space-grotesk);
+  --font-display: var(--font-inter);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-/* Contenedor común: centrado, máx. 1120px y 20px -> 32px de padding lateral. */
+/* Contenedor común: centrado, máx. 1120px y 16px -> 32px de padding lateral. */
 @utility contenedor {
   width: 100%;
+  min-width: 0;
   max-width: 70rem;
   margin-inline: auto;
-  padding-inline: clamp(1.25rem, 0.5rem + 3vw, 2rem);
+  padding-inline: clamp(1rem, 3vw, 2rem);
 }
 
 @utility btn-primario {
@@ -133,8 +148,10 @@
 }
 
 @utility tarjeta {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--color-borde);
   border-radius: 20px;
   background-color: var(--color-superficie);
-  padding: 1.5rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
 }

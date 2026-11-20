@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireAdmin } from "@/lib/auth/guards";
-import { envPublico } from "@/lib/env";
+import { origenAplicacion } from "@/lib/origen-aplicacion";
 import { envServidor } from "@/lib/env.server";
 import { generarQrSvg } from "@/lib/qr/imagen";
 import {
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
   });
 
   // Lo que se codifica en el QR es la URL que abre la cámara nativa del celular.
-  const destino = new URL("/scan", envPublico.NEXT_PUBLIC_SITE_URL);
+  const destino = new URL("/scan", origenAplicacion());
   destino.searchParams.set("modo", parametros.data.modo);
   destino.searchParams.set("t", token);
 

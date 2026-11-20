@@ -7,6 +7,8 @@ import type { NextConfig } from "next";
  * Como todas las páginas leen la sesión o datos vivos, el costo real es marginal.
  */
 const nextConfig: NextConfig = {
+  // Evita que el indicador de desarrollo interfiera con los objetivos táctiles en E2E.
+  devIndicators: false,
   // Habilita forbidden()/unauthorized() (respuestas 403/401 desde el servidor).
   experimental: {
     authInterrupts: true,

@@ -1,6 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { cookies } from "next/headers";
 
 import { obtenerSesion, type SesionActual } from "@/lib/auth/session";
+import { tieneConsentimiento } from "@/lib/dominio/consentimiento";
+import {
+  COOKIE_SCAN_PENDIENTE,
+  TOKEN_SCAN_PENDIENTE,
+  consumirScanPendiente,
+} from "@/lib/scan/pendiente";
+import { OPCIONES_COOKIE } from "@/lib/supabase/cookies";
 import {
   esResultadoExitoso,
   esResultadoScan,
@@ -21,9 +29,9 @@ import { esquemaCuerpoScan } from "@/lib/validacion/scan";
 /**
  * `POST /api/scan` — registra una entrada o salida a partir del token del QR.
  *
- * El cuerpo es `{ t: "<token>" }` y la ruta **no** verifica la firma ni interpreta zona ni
- * modo: solo transporta el token a la RPC `registrar_scan`, que hace toda la validación en
- * una transacción y devuelve un `public.resultado_scan` (S-16, S-33).
+ * El cuerpo es `{ t: "<token>" }`. Los QR normales se transportan a la RPC sin modificarlos.
+ * El marcador `pendiente` canjea una continuación de un solo uso tras verificar sesión y
+ * consentimiento (S-48). La RPC sigue validando firma y reglas de negocio en una transacción.
  *
  * Orden de las comprobaciones (de más barata a más cara):
  *   1. mismo origen (S-28) → 2. Content-Type → 3. límite por IP → 4. tamaño y parseo del
@@ -166,9 +174,21 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    let token = validado.data.t;
+    if (token === TOKEN_SCAN_PENDIENTE) {
+      if (!tieneConsentimiento(sesion.perfil)) {
+        return respuestaResultado("sin_consentimiento");
+      }
+      const continuacion = await consumirScanPendiente();
+      (await cookies()).set(COOKIE_SCAN_PENDIENTE, "", {
+        ...OPCIONES_COOKIE, maxAge: 0,
+      });
+      if (!continuacion) return respuestaResultado("token_expirado");
+      token = continuacion;
+    }
     const supabase = await crearClienteServidor();
     const { data, error } = await supabase.rpc("registrar_scan", {
-      p_token: validado.data.t,
+      p_token: token,
     });
 
     if (error) {

@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   PuntoHoraHoy,
@@ -15,8 +16,8 @@ import type {
  * puede usar `next/dynamic` con `ssr: false`: Recharts queda fuera del HTML del servidor y de
  * la hidratación inicial, y sus estilos inline por CSSOM nunca chocan con la CSP.
  *
- * Mientras llega el chunk se muestra un esqueleto con las mismas dimensiones para que no haya
- * salto de layout (CLS). El `aria-busy` avisa a los lectores de pantalla.
+ * Mientras llega el chunk se reserva espacio con un esqueleto. El CLS se mide en la suite
+ * de producción; la altura final puede variar según el texto. `aria-busy` anuncia la espera.
  */
 
 type Props = {
@@ -51,5 +52,21 @@ const GraficosDiferidos = dynamic(
 );
 
 export function GraficosDashboardCarga({ porHora, hoy, dias }: Props) {
-  return <GraficosDiferidos porHora={porHora} hoy={hoy} dias={dias} />;
+  const contenedor = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!contenedor.current) return;
+    if (!("IntersectionObserver" in window)) {
+      void Promise.resolve().then(() => setVisible(true));
+      return;
+    }
+    const observador = new IntersectionObserver(([entrada]) => {
+      if (entrada.isIntersecting) { setVisible(true); observador.disconnect(); }
+    }, { rootMargin: "200px" });
+    observador.observe(contenedor.current);
+    return () => observador.disconnect();
+  }, []);
+  return <div ref={contenedor} data-testid="graficos-diferidos" className="min-w-0">
+    {visible ? <GraficosDiferidos porHora={porHora} hoy={hoy} dias={dias} /> : <EsqueletoGraficos />}
+  </div>;
 }

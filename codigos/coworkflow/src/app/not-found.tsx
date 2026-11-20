@@ -17,7 +17,7 @@ export default async function NoEncontrado() {
       </p>
       <Link
         href="/"
-        className="mt-6 inline-flex w-fit rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+        className="btn-primario mt-6 w-fit"
       >
         Volver al inicio
       </Link>

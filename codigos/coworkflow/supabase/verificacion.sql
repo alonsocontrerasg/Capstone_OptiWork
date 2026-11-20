@@ -1,6 +1,6 @@
 -- ============================================================
 -- CoworkFlow · verificacion.sql — Etapa 2 (ampliado en Etapas 5 y 6b)
--- Ejecutar en el SQL Editor DESPUÉS de aplicar las 10 migraciones y el seed.
+-- Ejecutar en el SQL Editor DESPUÉS de aplicar las 12 migraciones y el seed.
 -- Corre como postgres. Si todo está bien termina con:
 --   NOTICE: Verificación OK ...
 -- Si algo falla, lanza una excepción listando los problemas encontrados.
@@ -29,6 +29,8 @@ declare
     to_regprocedure('public.registrar_scan(text)'),
     to_regprocedure('public.registrar_consentimiento(integer)'),
     to_regprocedure('public.es_admin()'),
+    to_regprocedure('public.sesion_vigente()'),
+    to_regprocedure('public.actualizar_configuracion_zona(uuid,text,integer,integer,integer,boolean,jsonb)'),
     to_regprocedure('public.permanencia_promedio(uuid,timestamptz,timestamptz)'),
     to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)'),
     to_regprocedure('public.ocupacion_por_franja(uuid,integer)'),
@@ -153,15 +155,34 @@ begin
     v_errores := v_errores || 'Falta el trigger on_auth_user_created en auth.users'::text;
   end if;
 
-  -- Contador de ocupación: se mantiene en la misma transacción que cada check-in/check-out.
+  -- Contador: tres triggers AFTER STATEMENT con tablas de transición (S-47).
+  -- tgtype: INSERT=4, UPDATE=16, DELETE=8; sin los bits ROW ni BEFORE.
+  for v_rel in
+    select * from (values
+      ('trg_sesiones_actualizar_ocupacion', 4, null::text, 'sesiones_nuevas'),
+      ('trg_sesiones_actualizar_ocupacion_update', 16, 'sesiones_anteriores', 'sesiones_nuevas'),
+      ('trg_sesiones_actualizar_ocupacion_delete', 8, 'sesiones_anteriores', null::text)
+    ) as esperados(nombre, tipo, anteriores, nuevas)
+  loop
+    if not exists (
+      select 1 from pg_trigger t
+      where t.tgrelid = 'public.sesiones'::regclass
+        and t.tgname = v_rel.nombre and not t.tgisinternal
+        and t.tgtype = v_rel.tipo and t.tgenabled in ('O', 'A')
+        and t.tgoldtable::text is not distinct from v_rel.anteriores
+        and t.tgnewtable::text is not distinct from v_rel.nuevas
+        and t.tgfoid = to_regprocedure('public.actualizar_ocupacion()')
+    ) then
+      v_errores := v_errores || format('Falta o está mal configurado el trigger de ocupación %s', v_rel.nombre);
+    end if;
+  end loop;
+
+  -- VOLATILE permite una instantánea nueva al contar DESPUÉS de esperar el bloqueo.
   if not exists (
-    select 1 from pg_trigger t
-    join pg_class c on c.oid = t.tgrelid
-    join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public' and c.relname = 'sesiones'
-      and t.tgname = 'trg_sesiones_actualizar_ocupacion' and not t.tgisinternal
+    select 1 from pg_proc where oid = to_regprocedure('public.refrescar_ocupacion(uuid)')
+      and provolatile = 'v'
   ) then
-    v_errores := v_errores || 'Falta el trigger trg_sesiones_actualizar_ocupacion en sesiones'::text;
+    v_errores := v_errores || 'refrescar_ocupacion debe ser VOLATILE (S-47)'::text;
   end if;
 
   -- Toda zona nueva debe nacer con su fila en ocupacion_actual.
@@ -221,6 +242,8 @@ begin
     'public.crear_ocupacion_inicial()',
     'public.actualizar_ocupacion()',
     'public.es_admin()',
+    'public.sesion_vigente()',
+    'public.actualizar_configuracion_zona(uuid,text,integer,integer,integer,boolean,jsonb)',
     'public.obtener_secreto_qr()',
     'public.zona_abierta(uuid)',
     'public.zona_abierta_en(uuid,timestamptz)',
@@ -245,8 +268,11 @@ begin
       into v_definer, v_proconfig, v_acl
     from pg_proc p where p.oid = v_oid;
 
-    if not v_definer then
+    if not v_definer and v_firma not like 'public.actualizar_configuracion_zona(%' then
       v_errores := v_errores || format('%s no es SECURITY DEFINER', v_firma);
+    end if;
+    if v_definer and v_firma like 'public.actualizar_configuracion_zona(%' then
+      v_errores := v_errores || 'actualizar_configuracion_zona debe respetar RLS (SECURITY INVOKER)'::text;
     end if;
     if v_proconfig is null
        or not exists (select 1 from unnest(v_proconfig) c where c like 'search_path=%') then
@@ -272,7 +298,8 @@ begin
           v_errores := v_errores || format('%s conserva EXECUTE para PUBLIC', v_firma);
         end if;
       end if;
-    elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin') then
+    elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin',
+                      'public.sesion_vigente', 'public.actualizar_configuracion_zona') then
       if v_anon then
         v_errores := v_errores || format('%s NO debe ser ejecutable por anon', v_firma);
       end if;
@@ -343,6 +370,19 @@ begin
   where z.activa and oa.zona_id is null;
   if v_total > 0 then
     v_errores := v_errores || format('%s zonas activas sin fila en ocupacion_actual', v_total);
+  end if;
+
+  -- La comparación completa usa una sola instantánea y detecta deriva existente.
+  select count(*) into v_total
+  from public.zonas z
+  left join public.ocupacion_actual oa on oa.zona_id = z.id
+  left join (
+    select zona_id, count(*)::integer as cantidad
+    from public.sesiones where salida_at is null group by zona_id
+  ) abiertas on abiertas.zona_id = z.id
+  where oa.cantidad is distinct from coalesce(abiertas.cantidad, 0);
+  if v_total > 0 then
+    v_errores := v_errores || format('%s contadores difieren de las sesiones abiertas', v_total);
   end if;
 
   -- 14) Agregados del dashboard: solo 7/30 días y la curva de hoy no supera 300 filas

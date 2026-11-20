@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { LayoutDashboard, QrCode } from "lucide-react";
+import { redirect } from "next/navigation";
 
 import { AvisoConsentimiento } from "@/components/auth/AvisoConsentimiento";
 import { obtenerSesion } from "@/lib/auth/session";
@@ -10,6 +11,7 @@ import {
   tieneConsentimiento,
 } from "@/lib/dominio/consentimiento";
 import { modoDesdeIndicadorScan } from "@/lib/validacion/scan";
+import { obtenerScanPendiente } from "@/lib/scan/pendiente";
 
 const formatoFecha = new Intl.DateTimeFormat("es-CL", {
   dateStyle: "long",
@@ -33,6 +35,9 @@ export default async function Home({ searchParams }: Props) {
   const desactualizado = consentimientoDesactualizado(sesion?.perfil);
   const params = await searchParams;
   const modoScan = modoDesdeIndicadorScan(params.desde, params.modo);
+  if (sesion && conConsentimiento && modoScan && (await obtenerScanPendiente())) {
+    redirect("/scan");
+  }
 
   return (
     <div className="flex flex-1 flex-col">
@@ -134,6 +139,11 @@ export default async function Home({ searchParams }: Props) {
                     Ver la ocupación
                   </Link>
                   {sesion.perfil?.rol === "admin" && (
+                    <Link href="/admin" className="btn-secundario w-full">
+                      Administrar zonas e historial
+                    </Link>
+                  )}
+                  {sesion.perfil?.rol === "admin" && (
                     <Link href="/qr" className="btn-secundario w-full">
                       <QrCode aria-hidden className="mr-2 size-4" />
                       Abrir el QR rotativo
@@ -160,7 +170,7 @@ export default async function Home({ searchParams }: Props) {
                   {formatearFecha(sesion.perfil?.consentimiento_at ?? null) ?? "—"}.{" "}
                   <Link
                     href="/privacidad"
-                    className="font-medium text-marca underline underline-offset-4"
+                    className="foco-marca inline-flex min-h-11 items-center px-1 font-medium text-marca underline underline-offset-4"
                   >
                     Ver el aviso
                   </Link>

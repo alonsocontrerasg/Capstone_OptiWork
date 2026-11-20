@@ -255,7 +255,7 @@ function VistaConfirmacion({
             }`}
           />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-tinta">
+            <p className="text-sm font-semibold text-tinta">
               {nombreZona}
             </p>
             <p

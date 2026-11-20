@@ -85,8 +85,9 @@ export function origenSupabase(url: string = envPublico.NEXT_PUBLIC_SUPABASE_URL
   wss: string;
 } | null {
   try {
-    const { origin, host } = new URL(url);
-    return { https: origin, wss: `wss://${host}` };
+    const { origin, host, protocol } = new URL(url);
+    // Supabase local usa HTTP/WS; el servicio HTTPS conserva exclusivamente WSS.
+    return { https: origin, wss: `${protocol === "http:" ? "ws" : "wss"}://${host}` };
   } catch {
     return null;
   }

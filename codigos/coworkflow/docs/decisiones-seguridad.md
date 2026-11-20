@@ -62,6 +62,12 @@
 | S-44 | Transición post-login del escaneo: indicador sin token (`desde=scan` + `modo` cerrado) | 6 |
 | S-45 | Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente | 6 |
 | S-46 | `GET /scan` lee la zona del token con un UUID validado, solo para presentación | 6 |
+| S-47 | Contador serializado por zona antes del COUNT y triggers por sentencia | 6 |
+| S-48 | Continuación del QR durante el alta | 6 |
+| S-49 | Sesión administrativa revocable | 6 |
+| S-50 | Configuración transaccional y CSV seudonimizado | 6 |
+| S-51 | CI aislado con PostgreSQL, Auth y navegador | 6 |
+| S-52 | Protocolo de Realtime alineado al origen configurado | 6 |
 
 ---
 
@@ -357,6 +363,9 @@ una disputa); se acepta porque el objetivo del sistema es el aforo, no la vigila
 
 ### S-12 · `/scan` sin sesión descarta el token (no se reutiliza después del login)
 
+> Actualización 2026-11-19: S-48 sustituye el reescaneo obligatorio por una continuación de
+> diez minutos y un solo uso. El QR original sigue sin reenviarse al login ni al correo.
+
 **Decisión.** Si alguien abre `/scan` sin sesión, se redirige a `/login` **sin conservar el token**:
 no viaja en `?next=`, ni en cookie, ni en `sessionStorage`/`localStorage`. Al volver del login, la
 persona debe escanear el QR otra vez. El token tampoco se registra en logs de aplicación y `/scan`
@@ -389,16 +398,17 @@ un bug futuro dejan el número por encima o por debajo de la realidad. Un contad
 semáforo «Lleno» falso; uno deflactado rompe la confianza en el sistema y podría usarse para ocultar
 sobreaforo.
 
-**Por qué esta solución.** Los contadores incrementales son rápidos pero acumulan error; los
-recálculos son exactos pero caros si se hacen siempre. Este diseño combina ambos: camino rápido para
-la latencia (trigger) y camino exacto periódico (job), con un índice parcial que hace el `COUNT`
-barato. Además el snapshot que se guarda y el contador quedan coherentes entre sí.
+**Por qué esta solución.** Tanto el trigger como el job recalculan con `COUNT` sobre el índice
+parcial de sesiones abiertas. Desde S-47, ambos bloquean primero el contador de la zona y luego
+cuentan con una instantánea nueva. El trigger agrupa por zona y sentencia para no repetir el
+recuento por cada fila de un lote. El snapshot y el contador quedan coherentes en esa transacción.
 
 **Dónde se implementa.** `..._triggers_ocupacion.sql` + `coworkflow_snapshot` (Etapa 2); el job es
 la verificación oficial del invariante I6 de `docs/arquitectura.md`.
 
-**Tradeoff.** La cifra puede estar desviada hasta 5 minutos en el peor caso, lo que es irrelevante
-para un semáforo de aforo.
+**Tradeoff.** La reconciliación es una reparación adicional de deriva previa o de operaciones
+administrativas fuera del flujo normal; desde S-47 las escrituras concurrentes soportadas no
+dependen de esperar al próximo job para corregir el contador.
 
 ### S-14 · Verificación obligatoria de RLS después de aplicar migraciones a mano
 
@@ -1204,6 +1214,9 @@ pide el enlace mágico debe esperar.
 
 ### S-36 · `getClaims()` no detecta revocación; `/admin` usará `getUser()`
 
+> Sustituida para administración por S-49: getUser se combina con la comprobación de
+> session_id en auth.sessions. La identidad consultada en Auth no basta por sí sola.
+
 **Decisión.** `obtenerSesion()` (y por tanto los guards de lectura) usa `supabase.auth.getClaims()`, que
 valida firma y expiración del JWT, y lee el rol de `profiles` en cada llamada (S-27). Las acciones
 sensibles de `/admin` (Etapa 6: guardar aforo, umbrales y horario, exportar CSV, historial con datos
@@ -1562,6 +1575,9 @@ de escribir `si`.
 
 ### S-44 · Transición post-login del escaneo: solo un indicador sin token
 
+> Actualización 2026-11-19: el indicador sigue siendo informativo; S-48 permite reanudar un
+> escaneo verificado mediante una cookie opaca. Ya no se exige reescanear en el recorrido normal.
+
 **Decisión.** Cuando `GET /scan` no tiene sesión o consentimiento, redirige a
 `/login?desde=scan&modo=<entrada|salida>` o a `/?desde=scan&modo=<entrada|salida>` en vez de
 `/login` o `/`. El indicador viaja **sin el token**: `desde` es un enum cerrado (`scan`) y
@@ -1727,23 +1743,139 @@ abrió el enlace; no sigue avanzando en pantalla.
 
 ---
 
+### S-47 · Contador serializado por zona antes del COUNT
+
+**Problema reproducido.** Dos usuarios diferentes insertan sesiones en transacciones solapadas.
+Ambos recuentos antiguos pueden ver solo una sesión. El segundo UPSERT espera al primero, pero
+guarda el valor calculado ANTES de esperar: quedan dos sesiones abiertas y un contador de uno.
+El advisory lock de `registrar_scan` es por usuario y no protege esta carrera entre personas.
+
+**Decisión.** La migración 11 crea la fila agregada si falta, obtiene `FOR UPDATE` sobre ella y
+solo entonces ejecuta el `COUNT` en una sentencia separada. `refrescar_ocupacion` sigue siendo
+`VOLATILE`: en READ COMMITTED el recuento ve los commits ocurridos mientras esperaba el bloqueo.
+La exclusión se limita a una zona y permanece hasta COMMIT/ROLLBACK. No se cambia la RPC ni la
+publicación de Realtime; la fila agregada sigue sin identificadores de personas.
+
+Los tres triggers `AFTER STATEMENT` usan tablas de transición para recalcular una sola vez por
+zona afectada, incluyendo origen y destino de una reasignación. Trigger y `cron_snapshot`
+adquieren los bloqueos en orden UUID ascendente, reduciendo ciclos de bloqueo entre lotes de
+varias zonas. La migración se aplica en una transacción y reconcilia los contadores existentes.
+Se conservan `SECURITY DEFINER`, `search_path` fijo y los privilegios EXECUTE anteriores.
+
+**Verificación.** `tests/integration/ocupacion-concurrencia.test.mjs` usa PostgreSQL real y
+conexiones independientes. La prueba de dos entradas falla sin la migración (1 ≠ 2). Con ella
+se verifican entradas, salidas, mezcla de ambas, snapshot concurrente, rollback, zonas
+independientes, cambios de zona y borrados, cierre automático de un lote, 12 llamadas paralelas
+por modo a la RPC autenticada, reaplicación de la migración y privilegios. El runner es
+`node:test` para esta integración SQL; Vitest sigue siendo la herramienta prevista para las
+pruebas de dominio. Ver `tests/integration/README.md` para ejecutar y reproducir la regresión.
+
+**Límites.** El protocolo está diseñado para READ COMMITTED, el aislamiento predeterminado de
+PostgreSQL/PostgREST. Con REPEATABLE READ o SERIALIZABLE pueden requerirse reintentos por error
+40001; transacciones administrativas que acumulen varias sentencias y zonas en órdenes distintos
+también pueden requerir reintentos por 40P01. No se garantiza ausencia de todo deadlock arbitrario.
+No se aplica la migración automáticamente a Supabase desde estas pruebas.
+
+### S-48 · Continuación breve del escaneo durante registro y consentimiento
+
+**Problema.** Descartar el QR al iniciar sesión obliga a escanear otra vez después de crear la
+cuenta o aceptar el aviso. Guardar el token original no resuelve su vencimiento de 45–90 segundos.
+
+**Decisión.** Antes de mandar al login, `GET /auth/scan` limita por IP y verifica en el servidor
+la firma HMAC con comparación en tiempo constante y la ventana actual/anterior del QR original.
+Solo si es válido crea una clave aleatoria de 256 bits, con TTL de 600 segundos en Upstash Redis.
+Su valor contiene únicamente zona, modo y vencimiento; no contiene QR, correo, IP ni usuario.
+La cookie `ow_scan_pendiente` contiene solo la clave opaca, es httpOnly, SameSite=Lax, Secure en
+producción, host-only y expira a los diez minutos. Leerla nunca renueva el plazo.
+
+Login, registro con/sin confirmación y enlace mágico vuelven a `/scan`. El correo de confirmación
+debe abrirse en el mismo navegador y dominio que el escaneo. Sin consentimiento, la portada
+conserva el indicador y vuelve a la confirmación cuando se acepta. Ningún GET marca asistencia.
+
+`POST /api/scan` conserva origen, validación, sesión y límites por IP/usuario. Con el marcador
+`pendiente`, exige además consentimiento antes de consumir. `GETDEL` de Redis canjea el registro
+una sola vez, incluso con POST simultáneos. Solo los datos del registro autorizado permiten
+firmar un QR vigente; nunca se aceptan zona/modo del cliente para este canje. La RPC ordinaria
+valida de nuevo firma, consentimiento, horario, estado de zona, cooldown y sesión abierta con
+el JWT del usuario. Se borra la cookie tras el canje. No usa `service_role` ni cambia SQL/RLS.
+
+**Límites y tradeoff.** Se acepta explícitamente que una prueba de presencia válida pueda
+confirmarse hasta diez minutos después, para permitir el alta; los QR normales conservan su
+ventana corta. La continuación no permite usos repetidos ni se comparte por URL. Upstash es
+obligatorio en producción y los errores fallan cerrados; la memoria local solo se permite en
+desarrollo. Si el servicio falla después de consumir y antes de completar la RPC, se requiere
+escanear de nuevo. El consumo y la escritura SQL no son una transacción distribuida. Abrir el
+correo en otro navegador/dominio o tardar más de diez minutos también requiere otro escaneo.
+`Referrer-Policy: strict-origin` y `Cache-Control: no-store` cubren `/auth/scan`; no se registran
+tokens, cookies ni errores completos de proveedores.
+
+**Verificación.** `npm run test:unit`: firma/ventana, alta y callback de confirmación, acceso con
+contraseña/enlace, consentimiento antes de consumir, conservación de zona/modo, expiración fija,
+cookies inventadas, doble POST y replay, origen/rate limit y caída de Redis. Los servicios externos
+se sustituyen por dobles de prueba; la validación manual en el despliegue es adicional.
+
+### S-49 · Administración con sesión revocable
+
+GetClaims valida el JWT; getUser consulta la identidad, pero tampoco basta por sí solo para
+revocar inmediatamente un access token vigente. Siguiendo la [documentación de Supabase](https://supabase.com/docs/guides/auth/sessions),
+la migración 12 agrega `sesion_vigente()`: contrasta UID/session_id con auth.sessions y not_after.
+Es SECURITY DEFINER, con search_path fijo, sin argumentos ni acceso para anon/PUBLIC. Solo
+devuelve un booleano y no expone Auth. `es_admin()` exige esa sesión y el rol actual de profiles.
+Así RLS también rechaza al admin revocado o degradado. El guard de admin/QR y sus APIs consulta
+getUser, la RPC y el perfil. Errores o migración ausente fallan cerrados. Sustituye el pendiente
+administrativo de S-36. Los flujos ordinarios conservan getClaims; no se cachean permisos.
+
+### S-50 · Configuración atómica y exportación acotada
+
+El POST valida origen, tipo/tamaño, límites, sesión administrativa y zod. La RPC es SECURITY
+INVOKER: respeta RLS, comprueba de nuevo es_admin y valida números/días/horas antes de bloquear
+la zona y reemplazar la semana en una transacción. No usa service_role; prevalece el último
+guardado. El panel administra zonas existentes, sin crear cuentas ni asignar roles.
+
+Historial: páginas de 50, filtros de zona y 7/30/90 días, orden estable e instante de corte.
+CSV: lotes de 500, máximo 10.000 filas (413 al superarlo), tres descargas/minuto/usuario,
+attachment y private,no-store. No exporta correos ni UUID: usa HMAC con propósito separado,
+truncado a 96 bits. Rotar la clave QR cambia los seudónimos. Los horarios siguen siendo datos
+administrativos, no anónimos. Se escapan delimitadores y se neutralizan fórmulas de hojas.
+
+### S-51 · CI reproducible sin secretos remotos
+
+GitHub Actions ejecuta lint, unidad, RLS/concurrencia en PostgreSQL real y build. Otro job
+levanta Supabase local con Auth, PostgREST y Mailpit y prueba mediante Playwright móvil:
+registro/correo, consentimiento, marca explícita, contador, salida, edición, CSV y revocación.
+Dos usuarios reales de Auth comprueban el aislamiento por REST. Las bases son descartables;
+los scripts rechazan destinos remotos. CI no recibe secretos remotos, no aplica SQL remoto ni
+hace merge. Los informes de fallos duran siete días. El navegador usa Next en desarrollo con
+memoria local para límites/continuación; el build se verifica aparte. El correo real y Upstash
+de producción requieren comprobación operativa después de publicar.
+
+En Preview, QR/correos usan VERCEL_BRANCH_URL/VERCEL_URL del servidor y un dominio .vercel.app
+validado, nunca Host/Origin del cliente. Producción usa el origen configurado. Autorizar la
+rama en Auth es opcional si se prueba el correo manualmente después del merge. No se relajan
+confirmaciones ni se agregan dominios automáticamente. Ver docs/operacion.md.
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
 | --- | --- |
-| Tests automáticos de RLS (comportamiento con usuarios reales) | 6 |
 | Almacenamiento de secretos en Vercel y rotación de llaves de Supabase | 4 · 6 |
-| Seudonimización efectiva en el export CSV | 6 |
 | Resultado de los tests de RLS como evidencia para el informe | 6 |
-| `getUser()` en las acciones de `/admin` (S-36) | 6 |
-| `requireAdmin()` con `getUser()` para `/qr` y `/api/qr/token` (S-36, limitación conocida) | 6 |
 | Vector HMAC `fd5034f9…bdef` como test de Vitest (S-16 · S-26) | 6 |
 | Test de contrato entre `RESULTADOS_SCAN` y el enum `resultado_scan` (S-33) | 6 |
 | Ventana fija o revocación de `EXECUTE` a `anon` para `permanencia_promedio`/`personas_distintas` (S-37, limitación conocida) | 6 |
 
-> Revisado al cerrar la Etapa 5 (2026-11-12): **ninguna de las filas anteriores está resuelta
-> todavía**. `tests/unit` y `tests/rls` están vacíos, no existe ninguna ruta `/admin` y
-> `requireAdmin()` sigue apoyándose en `getClaims()`. Por eso no se elimina ninguna fila.
+> Etapa 6: administración, CSV, RLS y sesión revocable implementados en S-49..S-51.
+> La evidencia se conserva en los checks del PR. SMTP y la prueba manual tras el despliegue
+> siguen el procedimiento de operacion.md.
+
+### S-52 · Protocolo de Realtime y pruebas móviles
+
+La CSP deriva el WebSocket del origen exacto configurado para Supabase: `https` usa `wss`
+y `http` usa `ws`. Antes se fijaba siempre `wss`, lo que bloqueaba `ws://127.0.0.1:54321`
+en las pruebas locales y hacía que WebKit mostrara la frontera de error del contador.
+No se añaden comodines ni destinos nuevos al desplegar con Supabase HTTPS. La revisión móvil
+comprueba también la conexión «En vivo» en ambos motores; usuarios, horarios y valores de
+estrés se crean exclusivamente en servicios locales descartables.
 
 ## Control de cambios
 
