@@ -75,8 +75,9 @@ jobs:
           echo "QR_TOKEN_SECRET=abababababababababababababababababababababababababababababababab" >> "$GITHUB_ENV"
       - run: node scripts/preparar-e2e.mjs
       - run: npm run test:e2e
-        env:
-          RESPONSIVE_BASELINE: "1"
+      - run: npm run build
+      - name: Rendimiento móvil con build de producción
+        run: npx playwright test --config playwright.performance.config.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:

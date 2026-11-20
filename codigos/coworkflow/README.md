@@ -78,6 +78,7 @@ Consulta [operación y pruebas](docs/operacion.md) para reproducirlo con Docker.
 ## Documentación
 
 - [Operación, publicación y recuperación](docs/operacion.md).
+- [Revisión móvil: once características, correcciones y mediciones](docs/revision-responsive.md).
 - [Arquitectura](docs/arquitectura.md).
 - [Modelo de datos](docs/modelo-datos.md).
 - [Decisiones de seguridad](docs/decisiones-seguridad.md).

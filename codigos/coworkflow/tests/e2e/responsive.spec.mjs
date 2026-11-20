@@ -45,6 +45,14 @@ for(const [width,height] of [[320,568],[360,640],[390,844],[430,932],[568,320],[
     const datos=[];
     async function revisar(ruta,nombre){
       await page.goto(ruta);await expect(page.locator("main")).toBeVisible();
+      await expect(page.getByRole("heading",{name:"Algo salió mal",exact:true})).toHaveCount(0);
+      if(ruta==="/dashboard/estadisticas"){
+        await page.getByTestId("graficos-diferidos").scrollIntoViewIfNeeded();
+        await expect(page.locator(".recharts-surface").first()).toBeVisible();
+        // Abrir también tablas alternativas y cada día: comprobar contenido expandido.
+        for(const resumen of await page.locator("main summary:visible").all()) await resumen.click();
+        await page.evaluate(()=>window.scrollTo(0,0));
+      }
       const m=await medirResponsive(page);datos.push({ruta,nombre,...m});
       if([320,390,844].includes(width)) await page.screenshot({path:`test-results/responsive/${testInfo.project.name}-${nombre}-${width}.png`,fullPage:true,scale:"css"});
       return m;

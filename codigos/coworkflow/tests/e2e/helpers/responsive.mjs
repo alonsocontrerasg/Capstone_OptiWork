@@ -12,8 +12,8 @@ export async function medirResponsive(page) {
       .filter(visible).filter((e)=>!e.disabled && e.type!=="hidden");
     return {
       viewport: document.querySelector('meta[name="viewport"]')?.content,
-      pantalla: innerWidth, documento: document.documentElement.scrollWidth,
-      desbordamientos: elementos.filter((e)=>{const r=e.getBoundingClientRect();return r.right>innerWidth+1||r.left < -1;})
+      pantalla: document.documentElement.clientWidth, documento: document.documentElement.scrollWidth,
+      desbordamientos: elementos.filter((e)=>{const r=e.getBoundingClientRect();return r.right>document.documentElement.clientWidth+1||r.left < -1;})
         .map((e)=>({elemento:e.tagName,texto:texto(e),...caja(e)})).slice(0,20),
       scrollInterno: elementos.filter((e)=>e.clientWidth>0&&e.scrollWidth>e.clientWidth+1&&["auto","scroll"].includes(getComputedStyle(e).overflowX))
         .map((e)=>({elemento:e.tagName,texto:texto(e),...caja(e)})),
@@ -37,6 +37,7 @@ export function comprobarResponsive(medida, nombre) {
   expect(medida.viewport,`${nombre}: zoom disponible`).not.toMatch(/user-scalable=no|maximum-scale=1(?:,|$)/);
   expect(medida.documento,`${nombre}: ancho del documento`).toBeLessThanOrEqual(medida.pantalla+1);
   expect(medida.entradasPequenas,`${nombre}: texto de formularios`).toEqual([]);
+  expect(medida.textosPequenos,`${nombre}: texto legible`).toEqual([]);
   expect(medida.textosCortados,`${nombre}: texto cortado`).toEqual([]);
   expect(medida.controlesPequenos,`${nombre}: áreas táctiles`).toEqual([]);
   if(medida.pantalla<1024) {

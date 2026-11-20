@@ -170,7 +170,7 @@ export default async function Home({ searchParams }: Props) {
                   {formatearFecha(sesion.perfil?.consentimiento_at ?? null) ?? "—"}.{" "}
                   <Link
                     href="/privacidad"
-                    className="font-medium text-marca underline underline-offset-4"
+                    className="foco-marca inline-flex min-h-11 items-center px-1 font-medium text-marca underline underline-offset-4"
                   >
                     Ver el aviso
                   </Link>

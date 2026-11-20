@@ -7,8 +7,8 @@ export async function Encabezado() {
 
   return (
     <header className="border-b border-borde bg-superficie">
-      <div className="contenedor flex items-center justify-between gap-2 py-2.5">
-        <Link href="/" className="foco-marca flex min-h-11 items-center gap-2.5 rounded-xl">
+      <div className="contenedor flex flex-col items-stretch justify-between gap-2 py-2.5 sm:flex-row sm:items-center">
+        <Link href="/" className="foco-marca flex min-h-11 w-fit items-center gap-2.5 rounded-xl">
           <span
             aria-hidden
             className="grid size-9 shrink-0 place-items-center rounded-xl bg-marca text-xs font-semibold text-white"
@@ -21,14 +21,14 @@ export async function Encabezado() {
           </span>
         </Link>
 
-        <nav aria-label="Navegación principal" className="flex items-center gap-1">
-          <Link href="/dashboard" className="enlace-header">
+        <nav aria-label="Navegación principal" className="grid grid-cols-2 items-center gap-2 sm:flex">
+          <Link href="/dashboard" className="enlace-header justify-center">
             Ocupación
           </Link>
 
           {sesion ? (
             <form action="/auth/signout" method="post">
-              <button type="submit" className="btn-secundario">
+              <button type="submit" className="btn-secundario w-full">
                 Cerrar sesión
               </button>
             </form>

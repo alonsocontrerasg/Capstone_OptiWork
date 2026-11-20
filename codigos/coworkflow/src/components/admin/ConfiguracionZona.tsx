@@ -56,14 +56,17 @@ export function ConfiguracionZona({ zona }: { zona: ZonaPublica }) {
         </div>
         <label className="flex min-h-11 items-center gap-3 text-sm"><input name="activa" type="checkbox" defaultChecked={zona.activa} className="size-5" />Zona activa</label>
         <fieldset className="space-y-3"><legend className="mb-3 font-medium">Horario semanal</legend>
-          <div aria-hidden className="grid grid-cols-[1fr_6rem_6rem] gap-2 text-xs text-tenue sm:grid-cols-[1fr_8rem_8rem]"><span>Día</span><span>Apertura</span><span>Cierre</span></div>
-          {dias.map((dia, i) => <div key={dia.dia_semana} className="grid grid-cols-[1fr_6rem_6rem] items-center gap-2 sm:grid-cols-[1fr_8rem_8rem]">
-            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" className="size-4" checked={dia.abierto}
+          <div aria-hidden className="hidden gap-3 text-sm text-tenue sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_minmax(0,8rem)]"><span>Día</span><span>Apertura</span><span>Cierre</span></div>
+          {dias.map((dia, i) => <div key={dia.dia_semana} className="grid grid-cols-2 items-end gap-x-3 gap-y-1 rounded-xl border border-borde p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_minmax(0,8rem)] sm:border-0 sm:p-0">
+            <label className="col-span-2 flex min-h-11 items-center gap-2 text-sm sm:col-span-1"><input type="checkbox" className="size-5" checked={dia.abierto}
               onChange={(e) => setDias(dias.map((d, j) => j === i ? { ...d, abierto: e.target.checked } : d))} />{DIAS_SEMANA[i]}</label>
+            <label className="min-w-0 text-sm"><span className="sm:sr-only">Apertura</span>
             <input aria-label={`Apertura ${DIAS_SEMANA[i]}`} type="text" placeholder="HH:MM" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" maxLength={5} required={dia.abierto} disabled={!dia.abierto} value={dia.apertura} className={campo}
               onChange={(e) => setDias(dias.map((d, j) => j === i ? { ...d, apertura: e.target.value } : d))} />
+            </label><label className="min-w-0 text-sm"><span className="sm:sr-only">Cierre</span>
             <input aria-label={`Cierre ${DIAS_SEMANA[i]}`} type="text" placeholder="HH:MM" pattern="([01][0-9]|2[0-3]):[0-5][0-9]|24:00" maxLength={5} required={dia.abierto} disabled={!dia.abierto} value={dia.cierre} className={campo}
               onChange={(e) => setDias(dias.map((d, j) => j === i ? { ...d, cierre: e.target.value } : d))} />
+            </label>
           </div>)}
           <p className="text-xs text-tenue">Días desmarcados: cerrado. El cierre acepta 24:00. Cambiar el horario no cierra inmediatamente las estancias abiertas; las revisa el cierre automático.</p>
         </fieldset>

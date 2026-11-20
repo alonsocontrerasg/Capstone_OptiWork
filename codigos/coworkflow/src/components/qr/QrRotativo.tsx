@@ -107,13 +107,13 @@ export function QrRotativo({ zona, modo, nombreZona }: Props) {
   return (
     <section
       aria-label={`QR de ${ETIQUETA[modo].toLowerCase()} de ${nombreZona}`}
-      className="flex flex-col items-center rounded-2xl border border-zinc-200 p-5 dark:border-zinc-800"
+      className="flex min-w-0 flex-col items-center rounded-2xl border border-zinc-200 p-4 sm:p-5 dark:border-zinc-800"
     >
-      <h2 className="text-base font-semibold">
+      <h2 className="max-w-full text-center text-base font-semibold">
         {ETIQUETA[modo]} · {nombreZona}
       </h2>
 
-      <div className="mt-4 grid size-64 place-items-center rounded-xl bg-white p-2 sm:size-72">
+      <div className="mt-4 grid aspect-square w-full max-w-64 place-items-center rounded-xl bg-white p-2 sm:max-w-72">
         {datos ? (
           <div
             role="img"
@@ -141,7 +141,7 @@ export function QrRotativo({ zona, modo, nombreZona }: Props) {
       <button
         type="button"
         onClick={() => void cargar()}
-        className="mt-3 rounded-full border border-zinc-300 px-4 py-1.5 text-xs font-medium transition-colors hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:border-zinc-700 dark:hover:bg-zinc-900"
+        className="btn-secundario mt-3"
       >
         Actualizar ahora
       </button>

@@ -49,7 +49,7 @@ Requiere Docker, Supabase CLI 3.2.0, Node 24 y `npm ci`. Desde la app:
 ```sh
 supabase start --workdir tests/e2e
 supabase status --workdir tests/e2e -o env
-npx playwright install chromium
+npx playwright install chromium webkit
 ```
 
 Usar los valores **locales** de `API_URL`, `ANON_KEY`, `SERVICE_ROLE_KEY`, `DB_URL` para definir
@@ -68,13 +68,22 @@ conectar estas pruebas a Upstash de producción. El navegador usa Next en desarr
 ```sh
 node scripts/preparar-e2e.mjs
 npm run test:e2e
+npm run build
+npx playwright test --config playwright.performance.config.ts
 supabase stop --workdir tests/e2e --no-backup
 ```
 
 El script aplica las migraciones y una zona de prueba y desprograma los jobs solo en la base
 local. Las pruebas crean usuarios descartables y los eliminan al terminar. Mailpit captura
-el correo sin enviarlo externamente. Se usa viewport móvil Chromium; esto no equivale a
-probar todas las cámaras físicas ni clientes de correo. Los scripts rechazan bases remotas.
+el correo sin enviarlo externamente. Se usan Chromium y WebKit, ocho ventanas y giros sin
+recarga; esto no equivale a probar todas las cámaras físicas ni clientes de correo.
+Los scripts rechazan bases remotas. La suite de rendimiento inicia el build de producción,
+simula red/CPU móvil y registra métricas públicas sin enviar formularios.
+
+Consultar [revisión responsive](revision-responsive.md) para los once criterios, límites y
+prioridades. CI conserva capturas, JSON de mediciones y el informe HTML en
+`navegador-informe`. Al reproducirlo localmente, ejecutar en orden y mantener Supabase activo
+hasta terminar la medición de producción; Playwright detiene sus servidores Next al salir.
 
 ## Administración e historial
 

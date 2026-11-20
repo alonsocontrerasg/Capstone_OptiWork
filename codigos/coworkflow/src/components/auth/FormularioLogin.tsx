@@ -1,12 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { normalizarDestinoInterno } from "@/lib/auth/redirects";
 import { PASSWORD_MIN_LENGTH } from "@/lib/dominio/auth";
 
 type Modo = "enlace" | "contrasena" | "registro";
+
+const suscribir = () => () => {};
+const enCliente = () => true;
+const enServidor = () => false;
 
 /** Códigos genéricos que devuelve `POST /auth/login` (no exponen detalles de Supabase). */
 type CodigoErrorAuth =
@@ -82,6 +86,8 @@ async function leerRespuesta(respuesta: Response): Promise<RespuestaAuth | null>
 }
 
 export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
+  // No aceptar escritura antes de hidratar: una conexión móvil lenta podría perderla.
+  const listo = useSyncExternalStore(suscribir, enCliente, enServidor);
   const router = useRouter();
   const [modo, setModo] = useState<Modo>("contrasena");
   const [correo, setCorreo] = useState("");
@@ -158,6 +164,7 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
           </label>
           <input
             id="correo"
+            disabled={!listo || enviando}
             type="email"
             required
             autoComplete="email"
@@ -176,6 +183,7 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
             </label>
             <input
               id="contrasena"
+              disabled={!listo || enviando}
               type="password"
               required
               minLength={PASSWORD_MIN_LENGTH}
@@ -190,7 +198,7 @@ export function FormularioLogin({ destino, mensajeInicial = null }: Props) {
 
         <button
           type="submit"
-          disabled={enviando}
+          disabled={!listo || enviando}
           className="btn-primario h-12 w-full disabled:cursor-not-allowed disabled:opacity-40"
         >
           {enviando ? "Enviando…" : tituloBoton}

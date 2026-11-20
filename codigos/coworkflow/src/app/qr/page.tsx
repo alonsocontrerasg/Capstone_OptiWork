@@ -35,14 +35,14 @@ export default async function PaginaQr({ searchParams }: Props) {
           </div>
 
           {zonas.length > 1 && (
-            <form method="get" className="flex items-end gap-2">
-              <label htmlFor="zona" className="text-xs text-zinc-500 dark:text-zinc-400">
+            <form method="get" className="grid w-full min-w-0 gap-2 sm:flex sm:w-auto sm:max-w-full sm:items-end">
+              <label htmlFor="zona" className="min-w-0 text-sm text-zinc-500 dark:text-zinc-400">
                 Zona
                 <select
                   id="zona"
                   name="zona"
                   defaultValue={zona?.slug ?? ""}
-                  className="mt-1 block rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                  className="mt-1 block w-full min-w-0 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 dark:border-zinc-700 dark:bg-zinc-950"
                 >
                   {zonas.map((item) => (
                     <option key={item.id} value={item.slug}>
@@ -53,7 +53,7 @@ export default async function PaginaQr({ searchParams }: Props) {
               </label>
               <button
                 type="submit"
-                className="rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                className="btn-secundario shrink-0"
               >
                 Cambiar
               </button>

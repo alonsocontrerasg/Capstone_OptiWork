@@ -58,7 +58,7 @@ const formatearEjeY = (valor: number): string => FORMATO_DECIMAL.format(valor);
 /** Marca del sitio (`--color-marca`): contraste 5,9:1 sobre `--color-superficie`. */
 const COLOR_SERIE = "#0b6e79";
 
-const ESTILO_TICK = { fill: "currentColor", fontSize: 11 } as const;
+const ESTILO_TICK = { fill: "currentColor", fontSize: 14 } as const;
 
 type TarjetaProps = {
   id: string;
@@ -203,12 +203,12 @@ const CLASES_CELDA = "py-1 pr-3 text-left font-semibold text-tenue";
 
 function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
   return (
-    <details className="mt-3 text-xs">
-      <summary className="cursor-pointer font-medium text-tenue">
+    <details className="mt-3 text-sm">
+      <summary className="min-h-11 cursor-pointer py-3 font-medium text-tenue">
         Ver tabla de datos
       </summary>
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full border-collapse text-left">
+      <div className="mt-2">
+        <table className="w-full table-fixed border-collapse text-left">
           <caption className="sr-only">
             Ocupación promedio por hora del día, con la cantidad de muestras que
             respaldan cada promedio.
@@ -255,12 +255,12 @@ function TablaBarras({ puntos }: { puntos: PuntoPromedioHora[] }) {
 
 function TablaHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
   return (
-    <details className="mt-3 text-xs">
-      <summary className="cursor-pointer font-medium text-tenue">
+    <details className="mt-3 text-sm">
+      <summary className="min-h-11 cursor-pointer py-3 font-medium text-tenue">
         Ver tabla de datos
       </summary>
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full border-collapse text-left">
+      <div className="mt-2">
+        <table className="w-full table-fixed border-collapse text-left">
           <caption className="sr-only">
             Ocupación de hoy por hora. «—» indica que no hubo lectura en esa
             hora.
@@ -354,7 +354,7 @@ function GraficoBarras({
             <YAxis
               // Ancho reservado para que "100" o "62,5" se vean completos; sin margen negativo
               // a la izquierda, que era lo que recortaba la primera cifra.
-              width={44}
+              width={68}
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={false}
@@ -381,7 +381,7 @@ function GraficoBarras({
         </ResponsiveContainer>
       </div>
       <TablaBarras puntos={puntos} />
-      <p className="mt-2 text-[11px] leading-5 text-tenue">
+      <p className="mt-2 text-sm leading-5 text-tenue">
         Cada barra es el promedio de las lecturas automáticas de esa hora;
         «muestras» indica cuántas lecturas la respaldan.
       </p>
@@ -438,7 +438,7 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
               minTickGap={8}
             />
             <YAxis
-              width={36}
+              width={68}
               tick={ESTILO_TICK}
               tickLine={false}
               axisLine={false}
@@ -469,7 +469,7 @@ function GraficoHoy({ puntos }: { puntos: PuntoHoraHoy[] }) {
         </ResponsiveContainer>
       </div>
       <TablaHoy puntos={puntos} />
-      <p className="mt-2 text-[11px] leading-5 text-tenue">
+      <p className="mt-2 text-sm leading-5 text-tenue">
         Un hueco en la curva significa que no hubo lectura en esa hora.
       </p>
     </>

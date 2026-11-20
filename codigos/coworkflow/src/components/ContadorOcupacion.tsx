@@ -215,7 +215,7 @@ export function ContadorOcupacion({
             <span>{fraseEstado(resumen.estado)}</span>
           </p>
           <div className="mt-2 flex flex-wrap items-baseline gap-2">
-            <p className="text-7xl font-semibold leading-none tracking-tight tabular-nums">
+            <p className="text-[clamp(2.25rem,12vw,4.5rem)] font-semibold leading-none tracking-tight tabular-nums">
               {lectura.cantidad === null ? "—" : resumen.cantidad}
             </p>
             <p className="text-lg text-tenue">de {aforoMax} personas</p>

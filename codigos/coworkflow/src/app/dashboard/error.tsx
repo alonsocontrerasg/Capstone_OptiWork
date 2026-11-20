@@ -34,14 +34,14 @@ export default function ErrorDashboard({ retry }: Props) {
         <button
           type="button"
           onClick={() => retry()}
-          className="inline-flex items-center gap-2 rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="btn-primario gap-2"
         >
           <RefreshCw aria-hidden className="size-4" />
           Reintentar
         </button>
         <Link
           href="/"
-          className="inline-flex items-center rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+          className="btn-secundario"
         >
           Volver al inicio
         </Link>

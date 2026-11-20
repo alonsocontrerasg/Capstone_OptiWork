@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   PuntoHoraHoy,
@@ -51,5 +52,21 @@ const GraficosDiferidos = dynamic(
 );
 
 export function GraficosDashboardCarga({ porHora, hoy, dias }: Props) {
-  return <GraficosDiferidos porHora={porHora} hoy={hoy} dias={dias} />;
+  const contenedor = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!contenedor.current) return;
+    if (!("IntersectionObserver" in window)) {
+      void Promise.resolve().then(() => setVisible(true));
+      return;
+    }
+    const observador = new IntersectionObserver(([entrada]) => {
+      if (entrada.isIntersecting) { setVisible(true); observador.disconnect(); }
+    }, { rootMargin: "200px" });
+    observador.observe(contenedor.current);
+    return () => observador.disconnect();
+  }, []);
+  return <div ref={contenedor} data-testid="graficos-diferidos" className="min-w-0">
+    {visible ? <GraficosDiferidos porHora={porHora} hoy={hoy} dias={dias} /> : <EsqueletoGraficos />}
+  </div>;
 }

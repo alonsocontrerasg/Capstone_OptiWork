@@ -97,7 +97,22 @@ export function MapaCalorDashboard({ filas, horas, aforoMax, horario }: Props) {
         </p>
       ) : (
         <>
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 space-y-2 lg:hidden">
+            <p className="text-sm text-tenue">Abre un día para consultar todas sus horas.</p>
+            {matriz.map((fila,indiceDia)=><details key={DIAS_SEMANA[indiceDia]} className="rounded-xl border border-borde">
+              <summary className="min-h-11 cursor-pointer px-3 py-3 text-sm font-semibold">{DIAS_SEMANA[indiceDia]}</summary>
+              <ul className="grid grid-cols-3 gap-2 px-3 pb-3 sm:grid-cols-6">
+                {horas.map((hora)=>{
+                  const valor=fila[hora]??null;
+                  return <li key={hora} className={`min-w-0 rounded-lg p-2 text-center ${valor===null?CLASES_SIN_DATO:CLASES_NIVEL[nivelDeOcupacion(valor,aforoMax)]}`}>
+                    <span className="block text-sm">{etiquetaHora(hora)}</span>
+                    <span className="block text-base font-semibold">{valor===null?"—":Math.round(valor)}</span>
+                  </li>;
+                })}
+              </ul>
+            </details>)}
+          </div>
+          <div className="mt-4 hidden overflow-x-auto lg:block">
             <table className="w-max border-separate border-spacing-1 text-xs">
               <caption className="sr-only">
                 Promedio de ocupación en personas dentro del cowork por día de
