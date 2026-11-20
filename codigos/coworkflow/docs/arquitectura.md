@@ -4,7 +4,9 @@
 > Sistema de monitoreo de ocupación del cowork del Hub Providencia (proyecto universitario,
 > presupuesto $0, todo sobre planes gratuitos).
 >
-> Estado: aprobado para implementación. Las etapas 2–6 completan el detalle.
+> Estado actual: implementadas autenticación, QR, scan, dashboard, administración y pruebas.
+> Este documento conserva decisiones del plan inicial. README.md y docs/operacion.md describen
+> la instalación, el despliegue y los pendientes operativos actuales.
 > Las decisiones de seguridad se justifican por separado en `docs/decisiones-seguridad.md`.
 
 ---
@@ -579,6 +581,6 @@ formato, para que el informe final se arme por acumulación.
 
 ---
 
-**Siguiente etapa (2):** esquema SQL completo con RLS, funciones, triggers y `pg_cron`, más
-`supabase/verificacion.sql`, `supabase/seed.sql` y `docs/modelo-datos.md`. No se escribe nada de
-eso hasta la confirmación explícita de la Etapa 1.
+**Estado de entrega:** las etapas de SQL, Auth, QR, scan, dashboard y administración están
+implementadas. El PR conserva la publicación a main para revisión posterior. La migración
+administrativa y la prueba manual del correo real siguen docs/operacion.md.

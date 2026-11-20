@@ -19,7 +19,10 @@ try {
     values ('11111111-1111-4111-8111-111111111111','prueba-e2e','Cowork de prueba',100,'UTC','00:00','24:00')
     on conflict(id) do nothing`);
   // Solo el entorno descartable: evita que los jobs interfieran con los tiempos de la prueba.
-  await cliente.query("select cron.unschedule(jobid) from cron.job where jobname like 'coworkflow_%'");
+  const cron = await cliente.query("select to_regclass('cron.job') as tabla");
+  if (cron.rows[0].tabla) {
+    await cliente.query("select cron.unschedule(jobid) from cron.job where jobname like 'coworkflow_%'");
+  }
   await cliente.query("notify pgrst, 'reload schema'");
   console.log("Migraciones y zona E2E preparadas en Supabase local.");
 } finally { await cliente.end(); }

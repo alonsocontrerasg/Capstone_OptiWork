@@ -63,6 +63,10 @@
 | S-45 | Horario semanal por zona: día sin fila = cerrado y `zona_abierta_en` como única fuente | 6 |
 | S-46 | `GET /scan` lee la zona del token con un UUID validado, solo para presentación | 6 |
 | S-47 | Contador serializado por zona antes del COUNT y triggers por sentencia | 6 |
+| S-48 | Continuación del QR durante el alta | 6 |
+| S-49 | Sesión administrativa revocable | 6 |
+| S-50 | Configuración transaccional y CSV seudonimizado | 6 |
+| S-51 | CI aislado con PostgreSQL, Auth y navegador | 6 |
 
 ---
 
@@ -1806,24 +1810,59 @@ contraseña/enlace, consentimiento antes de consumir, conservación de zona/modo
 cookies inventadas, doble POST y replay, origen/rate limit y caída de Redis. Los servicios externos
 se sustituyen por dobles de prueba; la validación manual en el despliegue es adicional.
 
+### S-49 · Administración con sesión revocable
+
+GetClaims valida el JWT; getUser consulta la identidad, pero tampoco basta por sí solo para
+revocar inmediatamente un access token vigente. Siguiendo la [documentación de Supabase](https://supabase.com/docs/guides/auth/sessions),
+la migración 12 agrega `sesion_vigente()`: contrasta UID/session_id con auth.sessions y not_after.
+Es SECURITY DEFINER, con search_path fijo, sin argumentos ni acceso para anon/PUBLIC. Solo
+devuelve un booleano y no expone Auth. `es_admin()` exige esa sesión y el rol actual de profiles.
+Así RLS también rechaza al admin revocado o degradado. El guard de admin/QR y sus APIs consulta
+getUser, la RPC y el perfil. Errores o migración ausente fallan cerrados. Sustituye el pendiente
+administrativo de S-36. Los flujos ordinarios conservan getClaims; no se cachean permisos.
+
+### S-50 · Configuración atómica y exportación acotada
+
+El POST valida origen, tipo/tamaño, límites, sesión administrativa y zod. La RPC es SECURITY
+INVOKER: respeta RLS, comprueba de nuevo es_admin y valida números/días/horas antes de bloquear
+la zona y reemplazar la semana en una transacción. No usa service_role; prevalece el último
+guardado. El panel administra zonas existentes, sin crear cuentas ni asignar roles.
+
+Historial: páginas de 50, filtros de zona y 7/30/90 días, orden estable e instante de corte.
+CSV: lotes de 500, máximo 10.000 filas (413 al superarlo), tres descargas/minuto/usuario,
+attachment y private,no-store. No exporta correos ni UUID: usa HMAC con propósito separado,
+truncado a 96 bits. Rotar la clave QR cambia los seudónimos. Los horarios siguen siendo datos
+administrativos, no anónimos. Se escapan delimitadores y se neutralizan fórmulas de hojas.
+
+### S-51 · CI reproducible sin secretos remotos
+
+GitHub Actions ejecuta lint, unidad, RLS/concurrencia en PostgreSQL real y build. Otro job
+levanta Supabase local con Auth, PostgREST y Mailpit y prueba mediante Playwright móvil:
+registro/correo, consentimiento, marca explícita, contador, salida, edición, CSV y revocación.
+Dos usuarios reales de Auth comprueban el aislamiento por REST. Las bases son descartables;
+los scripts rechazan destinos remotos. CI no recibe secretos remotos, no aplica SQL remoto ni
+hace merge. Los informes de fallos duran siete días. El navegador usa Next en desarrollo con
+memoria local para límites/continuación; el build se verifica aparte. El correo real y Upstash
+de producción requieren comprobación operativa después de publicar.
+
+En Preview, QR/correos usan VERCEL_BRANCH_URL/VERCEL_URL del servidor y un dominio .vercel.app
+validado, nunca Host/Origin del cliente. Producción usa el origen configurado. Autorizar la
+rama en Auth es opcional si se prueba el correo manualmente después del merge. No se relajan
+confirmaciones ni se agregan dominios automáticamente. Ver docs/operacion.md.
+
 ## Pendientes de documentar en las próximas etapas
 
 | Tema | Etapa |
 | --- | --- |
-| Tests automáticos de RLS (comportamiento con usuarios reales) | 6 |
 | Almacenamiento de secretos en Vercel y rotación de llaves de Supabase | 4 · 6 |
-| Seudonimización efectiva en el export CSV | 6 |
 | Resultado de los tests de RLS como evidencia para el informe | 6 |
-| `getUser()` en las acciones de `/admin` (S-36) | 6 |
-| `requireAdmin()` con `getUser()` para `/qr` y `/api/qr/token` (S-36, limitación conocida) | 6 |
 | Vector HMAC `fd5034f9…bdef` como test de Vitest (S-16 · S-26) | 6 |
 | Test de contrato entre `RESULTADOS_SCAN` y el enum `resultado_scan` (S-33) | 6 |
 | Ventana fija o revocación de `EXECUTE` a `anon` para `permanencia_promedio`/`personas_distintas` (S-37, limitación conocida) | 6 |
 
-> Revisado al cerrar la Etapa 5 (2026-11-12): **ninguna de las filas anteriores está resuelta
-> todavía**. Desde el 2026-11-19 `tests/unit` prueba la continuación del QR (S-48); los tests
-> de RLS siguen pendientes, no existe ninguna ruta `/admin` y
-> `requireAdmin()` sigue apoyándose en `getClaims()`. Por eso no se elimina ninguna fila.
+> Etapa 6: administración, CSV, RLS y sesión revocable implementados en S-49..S-51.
+> La evidencia se conserva en los checks del PR. SMTP y la prueba manual tras el despliegue
+> siguen el procedimiento de operacion.md.
 
 ## Control de cambios
 
