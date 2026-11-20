@@ -1,6 +1,6 @@
 -- ============================================================
 -- CoworkFlow · verificacion.sql — Etapa 2 (ampliado en Etapas 5 y 6b)
--- Ejecutar en el SQL Editor DESPUÉS de aplicar las 11 migraciones y el seed.
+-- Ejecutar en el SQL Editor DESPUÉS de aplicar las 12 migraciones y el seed.
 -- Corre como postgres. Si todo está bien termina con:
 --   NOTICE: Verificación OK ...
 -- Si algo falla, lanza una excepción listando los problemas encontrados.
@@ -29,6 +29,8 @@ declare
     to_regprocedure('public.registrar_scan(text)'),
     to_regprocedure('public.registrar_consentimiento(integer)'),
     to_regprocedure('public.es_admin()'),
+    to_regprocedure('public.sesion_vigente()'),
+    to_regprocedure('public.actualizar_configuracion_zona(uuid,text,integer,integer,integer,boolean,jsonb)'),
     to_regprocedure('public.permanencia_promedio(uuid,timestamptz,timestamptz)'),
     to_regprocedure('public.personas_distintas(uuid,timestamptz,timestamptz)'),
     to_regprocedure('public.ocupacion_por_franja(uuid,integer)'),
@@ -240,6 +242,8 @@ begin
     'public.crear_ocupacion_inicial()',
     'public.actualizar_ocupacion()',
     'public.es_admin()',
+    'public.sesion_vigente()',
+    'public.actualizar_configuracion_zona(uuid,text,integer,integer,integer,boolean,jsonb)',
     'public.obtener_secreto_qr()',
     'public.zona_abierta(uuid)',
     'public.zona_abierta_en(uuid,timestamptz)',
@@ -264,8 +268,11 @@ begin
       into v_definer, v_proconfig, v_acl
     from pg_proc p where p.oid = v_oid;
 
-    if not v_definer then
+    if not v_definer and v_firma not like 'public.actualizar_configuracion_zona(%' then
       v_errores := v_errores || format('%s no es SECURITY DEFINER', v_firma);
+    end if;
+    if v_definer and v_firma like 'public.actualizar_configuracion_zona(%' then
+      v_errores := v_errores || 'actualizar_configuracion_zona debe respetar RLS (SECURITY INVOKER)'::text;
     end if;
     if v_proconfig is null
        or not exists (select 1 from unnest(v_proconfig) c where c like 'search_path=%') then
@@ -291,7 +298,8 @@ begin
           v_errores := v_errores || format('%s conserva EXECUTE para PUBLIC', v_firma);
         end if;
       end if;
-    elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin') then
+    elsif v_nombre in ('public.registrar_scan', 'public.registrar_consentimiento', 'public.es_admin',
+                      'public.sesion_vigente', 'public.actualizar_configuracion_zona') then
       if v_anon then
         v_errores := v_errores || format('%s NO debe ser ejecutable por anon', v_firma);
       end if;

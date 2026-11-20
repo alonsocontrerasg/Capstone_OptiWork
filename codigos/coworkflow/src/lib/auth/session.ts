@@ -13,8 +13,8 @@ import { crearClienteServidor } from "@/lib/supabase/server";
  * consulta el estado de la sesión en Auth. Un token revocado (por ejemplo, una sesión
  * cerrada desde otro dispositivo) se sigue aceptando hasta que vence, así que sirve para
  * identificar al usuario en las páginas normales, no para autorizar acciones sensibles. Las
- * acciones de `/admin` usarán `getUser()`, que pregunta a Auth en cada llamada y detecta
- * sesiones revocadas.
+ * acciones sensibles usan `obtenerSesionVerificada()`: getUser y una consulta de la sesión
+ * en auth.sessions. GetUser por sí solo tampoco revoca un access token aún vigente.
  */
 
 export type RolUsuario = "usuario" | "admin";
@@ -83,5 +83,22 @@ export async function obtenerSesion(): Promise<SesionActual | null> {
   return {
     usuario: { id: sub, email },
     perfil: normalizarPerfil(fila as FilaPerfil | null),
+  };
+}
+
+/** Para administración: identidad consultada en Auth, sesión existente y rol actual bajo RLS. */
+export async function obtenerSesionVerificada(): Promise<SesionActual | null> {
+  const supabase = await crearClienteServidor();
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) return null;
+  const vigente = await supabase.rpc("sesion_vigente");
+  if (vigente.error || vigente.data !== true) return null;
+  const perfil = await supabase.from("profiles")
+    .select("id, rol, consentimiento_at, consentimiento_version")
+    .eq("id", data.user.id).maybeSingle();
+  if (perfil.error) return null;
+  return {
+    usuario: { id: data.user.id, email: data.user.email ?? null },
+    perfil: normalizarPerfil(perfil.data as FilaPerfil | null),
   };
 }

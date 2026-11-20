@@ -139,6 +139,11 @@ export default async function Home({ searchParams }: Props) {
                     Ver la ocupación
                   </Link>
                   {sesion.perfil?.rol === "admin" && (
+                    <Link href="/admin" className="btn-secundario w-full">
+                      Administrar zonas e historial
+                    </Link>
+                  )}
+                  {sesion.perfil?.rol === "admin" && (
                     <Link href="/qr" className="btn-secundario w-full">
                       <QrCode aria-hidden className="mr-2 size-4" />
                       Abrir el QR rotativo

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { envPublico } from "@/lib/env";
+import { origenAplicacion } from "@/lib/origen-aplicacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
 import type { AccionAuth } from "@/lib/validacion/auth";
 
@@ -47,12 +47,12 @@ function codigoDeError(codigo: string | undefined): CodigoErrorAuth {
 /**
  * URL de retorno del enlace mágico.
  *
- * Se arma con `NEXT_PUBLIC_SITE_URL` (validada en `env.ts`), nunca con `request.url` ni con
+ * Se arma con el origen configurado (dominio de rama en preview), nunca con `request.url` ni con
  * la cabecera `Host`: un atacante puede falsificar `Host` y desviar el enlace del correo a
  * otro dominio (S-29).
  */
 function urlDeVuelta(destino: string): string {
-  const url = new URL("/auth/callback", envPublico.NEXT_PUBLIC_SITE_URL);
+  const url = new URL("/auth/callback", origenAplicacion());
   url.searchParams.set("next", destino);
   return url.toString();
 }

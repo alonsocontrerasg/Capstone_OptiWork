@@ -1,7 +1,7 @@
 import { forbidden, redirect } from "next/navigation";
 
 import { DESTINO_POR_DEFECTO } from "@/lib/auth/redirects";
-import { obtenerSesion, type SesionActual } from "@/lib/auth/session";
+import { obtenerSesion, obtenerSesionVerificada, type SesionActual } from "@/lib/auth/session";
 import { tieneConsentimiento } from "@/lib/dominio/consentimiento";
 
 /**
@@ -49,7 +49,8 @@ export async function requireConsentimiento(
 export async function requireAdmin(
   destino: string = DESTINO_POR_DEFECTO,
 ): Promise<SesionActual> {
-  const sesion = await requireUser(destino);
+  const sesion = await obtenerSesionVerificada();
+  if (!sesion) redirect(rutaLogin(destino));
   if (sesion.perfil?.rol !== "admin") forbidden();
   return sesion;
 }
